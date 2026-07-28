@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/admin/pengguna/tambah)",
+      "Read(//tmp/**)",
+      "PowerShell(Get-NetTCPConnection -LocalPort 3001 -State Listen -ErrorAction SilentlyContinue)",
+      "Bash(find / -iname \"chromium-cli*\" 2>/dev/null | head -5; find / -iname \"*chromium-cli*\" -path \"*bin*\" 2>/dev/null | head -5)",
+      "Read(//d//**)"
+    ]
+  },
+  "enabledPlugins": {
+    "supabase@claude-plugins-official": true,
+    "figma@claude-plugins-official": true,
+    "frontend-design@claude-plugins-official": true
+  }
+}

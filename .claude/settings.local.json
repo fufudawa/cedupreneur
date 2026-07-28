@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx --yes create-next-app@latest . --typescript --tailwind --app --eslint --src-dir=false --import-alias \"@/*\" --use-npm --no-turbopack)",
+      "mcp__claude_ai_Figma__get_design_context",
+      "Bash(npm install *)",
+      "mcp__claude_ai_Figma__get_screenshot",
+      "Bash(npm run *)"
+    ]
+  }
+}

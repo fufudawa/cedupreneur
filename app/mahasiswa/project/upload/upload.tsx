@@ -1,0 +1,245 @@
+"use client";
+
+import { useCallback, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { Plus } from "lucide-react";
+import { Select } from "@/components/ui";
+import { useDosenSupervisedGroups } from "@/lib/useDosenSupervisedGroups";
+import { useDosenProgressReports } from "@/lib/useDosenProgressReports";
+import { MENTORING_MILESTONES, getMilestoneReport } from "@/lib/dosenProgressReportsStorage";
+import { getCurrentDemoUser, getActiveMahasiswaGroup } from "@/lib/demoSession";
+
+const MILESTONE_OPTIONS = [
+  { value: "", label: "Pilih tahap/milestone..." },
+  ...MENTORING_MILESTONES.map((milestone) => ({ value: milestone.id, label: milestone.title })),
+];
+
+export default function UploadProgressPage() {
+  const router = useRouter();
+  const { groups, isHydrated: groupsHydrated } = useDosenSupervisedGroups();
+  const { reports, isHydrated: reportsHydrated, addReport, updateReport } = useDosenProgressReports();
+  const isHydrated = groupsHydrated && reportsHydrated;
+
+  const [isDragging, setIsDragging] = useState(false);
+  const [files, setFiles] = useState<File[]>([]);
+  const [comment, setComment] = useState("");
+  const [milestoneId, setMilestoneId] = useState("");
+  const [error, setError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [justSubmitted, setJustSubmitted] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const addFiles = useCallback((fileList: FileList | null) => {
+    if (!fileList) return;
+    setFiles((prev) => [...prev, ...Array.from(fileList)]);
+  }, []);
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragging(false);
+    addFiles(e.dataTransfer.files);
+  };
+
+  if (!isHydrated) {
+    return null;
+  }
+
+  const activeUser = getCurrentDemoUser("mahasiswa");
+  const activeGroup = activeUser ? getActiveMahasiswaGroup(activeUser, groups) : undefined;
+  const existingReport =
+    activeGroup && milestoneId ? getMilestoneReport(activeGroup.id, milestoneId, reports) : null;
+  const isRevision = existingReport !== null && existingReport.status === "revision_required";
+
+  // Temporary frontend-only demo upload.
+  // Replace with real file storage/backend when connected — for now only
+  // file metadata (name/type) is persisted, never a fake blob/download URL.
+  function handleUpload() {
+    if (isSubmitting) return;
+
+    if (!activeGroup) {
+      setError("Anda belum terhubung dengan kelompok. Hubungi dosen/admin.");
+      return;
+    }
+    if (milestoneId === "") {
+      setError("Pilih tahap/milestone terlebih dahulu.");
+      return;
+    }
+    if (files.length === 0) {
+      setError("Pilih minimal satu file.");
+      return;
+    }
+
+    setError("");
+    setIsSubmitting(true);
+
+    const milestone = MENTORING_MILESTONES.find((m) => m.id === milestoneId);
+    const now = new Date().toISOString();
+    const fileName = files.map((file) => file.name).join(", ");
+    const fileType = files[0]?.name.split(".").pop()?.toUpperCase() ?? "FILE";
+
+    if (existingReport) {
+      updateReport(existingReport.id, {
+        fileName,
+        fileType,
+        submittedBy: activeUser?.name ?? existingReport.submittedBy,
+        submittedAt: now,
+        comment,
+        status: "submitted",
+        revisionNumber: (existingReport.revisionNumber ?? 1) + 1,
+      });
+    } else {
+      addReport({
+        id: `report-${activeGroup.id}-${milestoneId}-${Date.now()}`,
+        groupId: activeGroup.id,
+        milestoneId,
+        milestoneTitle: milestone?.title ?? "",
+        fileName,
+        fileType,
+        submittedBy: activeUser?.name ?? "Mahasiswa",
+        submittedAt: now,
+        comment,
+        status: "submitted",
+        revisionNumber: 1,
+      });
+    }
+
+    setJustSubmitted(true);
+    setTimeout(() => router.push(`/mahasiswa/project/history/${milestoneId}`), 700);
+  }
+
+  if (!activeGroup) {
+    return (
+      <div className="rounded-3xl bg-white p-8 text-center shadow-sm ring-1 ring-slate-100">
+        <p className="text-sm font-semibold text-slate-900">
+          Anda belum terhubung dengan kelompok manapun.
+        </p>
+        <p className="mt-1 text-sm text-slate-400">
+          Hubungi dosen atau admin untuk ditambahkan ke sebuah kelompok terlebih dahulu.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {/* Milestone selector */}
+      <div className="rounded-3xl bg-white p-8 shadow-sm ring-1 ring-slate-100">
+        <h2 className="text-xl font-bold text-slate-900">Pilih Tahap/Milestone</h2>
+        <p className="mt-1 text-sm text-slate-400">
+          Kelompok: {activeGroup.code} &middot; {activeGroup.umkmName}
+        </p>
+        <div className="mt-4 max-w-md">
+          <Select
+            id="milestone"
+            options={MILESTONE_OPTIONS}
+            value={milestoneId}
+            onChange={(e) => {
+              setMilestoneId(e.target.value);
+              setError("");
+            }}
+          />
+        </div>
+        {isRevision && (
+          <p className="mt-2 text-xs font-medium text-orange">
+            Tahap ini sebelumnya berstatus Belum Tuntas — mengunggah di sini akan dikirim sebagai revisi.
+          </p>
+        )}
+      </div>
+
+      {/* Add File Progress */}
+      <div className="mt-6 rounded-3xl bg-white p-8 shadow-sm ring-1 ring-slate-100">
+        <div
+          onDragOver={(e) => {
+            e.preventDefault();
+            setIsDragging(true);
+          }}
+          onDragLeave={() => setIsDragging(false)}
+          onDrop={handleDrop}
+          onClick={() => inputRef.current?.click()}
+          className={[
+            "flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed px-6 py-16 text-center transition-colors",
+            isDragging
+              ? "border-purple-400 bg-purple-50"
+              : "border-slate-200 hover:border-purple-300 hover:bg-slate-50",
+          ].join(" ")}
+        >
+          <input
+            ref={inputRef}
+            type="file"
+            multiple
+            className="hidden"
+            accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.png,.jpg,.jpeg"
+            onChange={(e) => addFiles(e.target.files)}
+          />
+          <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-purple-100">
+            <Plus size={28} className="text-purple-600" />
+          </div>
+          <p className="text-xl font-bold text-slate-900">
+            Add File Progress
+          </p>
+          <p className="mt-2 text-sm text-slate-400">
+            Drag &amp; drop files here or click to browse
+          </p>
+          <p className="mt-1 text-sm text-slate-400">
+            PDF, DOCX, PPTX, XLSX, PNG, JPG (Max. 25MB)
+          </p>
+          <p className="mt-3 text-xs text-slate-400">
+            Catatan: hanya nama file yang disimpan pada tahap frontend ini — file asli akan dipindahkan
+            ke penyimpanan backend saat sudah terhubung.
+          </p>
+        </div>
+        {files.length > 0 && (
+          <ul className="mt-4 flex flex-col gap-1.5 text-sm text-slate-700">
+            {files.map((file, index) => (
+              <li key={`${file.name}-${index}`} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
+                <span className="truncate">{file.name}</span>
+                <button
+                  type="button"
+                  onClick={() => setFiles((prev) => prev.filter((_, i) => i !== index))}
+                  className="text-xs font-medium text-red-500 hover:text-red-600"
+                >
+                  Hapus
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Comment */}
+      <div className="mt-6 rounded-3xl bg-white p-8 shadow-sm ring-1 ring-slate-100">
+        <h2 className="text-xl font-bold text-slate-900">Comment</h2>
+        <textarea
+          value={comment}
+          maxLength={500}
+          onChange={(e) => setComment(e.target.value)}
+          placeholder="Write your comment here..."
+          rows={5}
+          className="mt-4 w-full resize-none border-b border-slate-200 pb-3 text-sm text-slate-800 outline-none placeholder:text-slate-400 focus:border-purple-400"
+        />
+        <p className="mt-1 text-right text-xs text-slate-400">
+          {comment.length} / 500
+        </p>
+      </div>
+
+      {error && <p className="mt-4 text-sm font-medium text-red-500">{error}</p>}
+      {justSubmitted && (
+        <p className="mt-4 rounded-xl bg-green-100 px-3.5 py-2 text-sm font-medium text-green-700">
+          Laporan berhasil dikirim. Status: Menunggu Feedback. Mengarahkan ke riwayat...
+        </p>
+      )}
+
+      {/* Upload button */}
+      <div className="mt-6 flex justify-end">
+        <button
+          type="button"
+          onClick={handleUpload}
+          disabled={isSubmitting}
+          className="flex items-center gap-2 rounded-2xl bg-gradient-to-r from-purple-600 to-purple-500 px-10 py-3.5 text-sm font-bold text-white shadow-md shadow-purple-500/30 transition-transform hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {isSubmitting ? "Mengunggah..." : "⬆ Upload"}
+        </button>
+      </div>
+    </div>
+  );
+}
