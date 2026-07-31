@@ -20,6 +20,8 @@ type ProfileRow = {
 type DosenRow = {
   nip: string | null;
   fakultas: string | null;
+  jabatan: string | null;
+  mata_kuliah_diampu: string[] | null;
 };
 
 type MahasiswaRow = {
@@ -33,6 +35,7 @@ type UmkmRow = {
   sektor_usaha: string | null;
   alamat: string | null;
   deskripsi_usaha: string | null;
+  kontak: string | null;
 };
 
 function firstRelation<T>(relation: T | T[] | null): T | undefined {
@@ -55,6 +58,8 @@ function mapProfileToAdminUser(profile: ProfileRow): AdminUser {
     ...(profile.role === "dosen" && {
       nip: dosen?.nip ?? undefined,
       prodi: dosen?.fakultas ?? undefined,
+      jabatan: dosen?.jabatan ?? undefined,
+      mataKuliah: dosen?.mata_kuliah_diampu ?? undefined,
     }),
     ...(profile.role === "mahasiswa" && {
       nim: mahasiswa?.nim ?? undefined,
@@ -66,6 +71,7 @@ function mapProfileToAdminUser(profile: ProfileRow): AdminUser {
       businessSector: umkm?.sektor_usaha ?? undefined,
       businessAddress: umkm?.alamat ?? undefined,
       businessDescription: umkm?.deskripsi_usaha ?? undefined,
+      phone: umkm?.kontak ?? undefined,
     }),
   };
 }
@@ -83,7 +89,9 @@ async function fetchUsers(): Promise<AdminUser[]> {
       created_by,
       dosen (
         nip,
-        fakultas
+        fakultas,
+        jabatan,
+        mata_kuliah_diampu
       ),
       mahasiswa (
         nim,
@@ -94,7 +102,8 @@ async function fetchUsers(): Promise<AdminUser[]> {
         nama_usaha,
         sektor_usaha,
         alamat,
-        deskripsi_usaha
+        deskripsi_usaha,
+        kontak
       )
     `);
 

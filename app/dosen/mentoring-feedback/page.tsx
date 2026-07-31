@@ -1,28 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { Users, FileText, MessageSquare, AlertCircle, CheckCircle2 } from "lucide-react";
 import { PageHeader, StatCard } from "@/components/shared";
 import { Badge, Button, Input, Select, ProgressBar, FilterToolbar } from "@/components/ui";
-import { useDosenSupervisedGroups } from "@/lib/useDosenSupervisedGroups";
-import { useDosenProgressReports } from "@/lib/useDosenProgressReports";
-import {
-  MENTORING_MILESTONES,
-  getCurrentStage,
-  calculateGroupProgress,
-  getGroupMentoringStatus,
-  GROUP_STATUS_LABEL,
-  GROUP_STATUS_BADGE_VARIANT,
-} from "@/lib/dosenProgressReportsStorage";
-import type { GroupMentoringStatus } from "@/lib/dosenProgressReportsStorage";
+import { useDosenKelompokBimbingan, type KelompokMentoringStatus } from "@/lib/useDosenKelompokBimbingan";
+import { ADMIN_GROUP_STATUS_LABEL, ADMIN_GROUP_STATUS_VARIANT } from "@/lib/adminDashboardData";
 
-const STAGE_OPTIONS = [
-  { value: "all", label: "Semua Tahap" },
-  ...MENTORING_MILESTONES.map((milestone) => ({ value: milestone.id, label: milestone.title })),
-];
+// Tidak ada tabel milestone/tahap di database — dropdown dipertahankan (layout
+// tidak berubah) tapi hanya berisi satu opsi inert.
+const STAGE_OPTIONS = [{ value: "all", label: "Semua Tahap" }];
 
-const STATUS_OPTIONS: { value: "all" | GroupMentoringStatus; label: string }[] = [
+const STATUS_OPTIONS: { value: "all" | KelompokMentoringStatus; label: string }[] = [
   { value: "all", label: "Semua Status" },
   { value: "waiting", label: "Menunggu Feedback" },
   { value: "incomplete", label: "Belum Tuntas" },
@@ -30,32 +20,17 @@ const STATUS_OPTIONS: { value: "all" | GroupMentoringStatus; label: string }[] =
 ];
 
 export default function DosenMentoringFeedbackPage() {
-  const { groups, isHydrated: groupsHydrated } = useDosenSupervisedGroups();
-  const { reports, isHydrated: reportsHydrated } = useDosenProgressReports();
-  const isHydrated = groupsHydrated && reportsHydrated;
+  const { groups, isHydrated } = useDosenKelompokBimbingan();
 
   const [search, setSearch] = useState("");
-  const [stageFilter, setStageFilter] = useState("all");
-  const [statusFilter, setStatusFilter] = useState<"all" | GroupMentoringStatus>("all");
-
-  const rows = useMemo(
-    () =>
-      groups.map((group) => ({
-        group,
-        currentStage: getCurrentStage(group.id, MENTORING_MILESTONES, reports),
-        progress: calculateGroupProgress(group.id, MENTORING_MILESTONES, reports),
-        status: getGroupMentoringStatus(group.id, MENTORING_MILESTONES, reports),
-        totalReports: reports.filter((r) => r.groupId === group.id).length,
-      })),
-    [groups, reports]
-  );
+  const [statusFilter, setStatusFilter] = useState<"all" | KelompokMentoringStatus>("all");
 
   // Summary counts kelompok, not laporan — a group with 2 "submitted" reports still counts once.
-  const totalWaiting = rows.filter((r) => r.status === "waiting").length;
-  const totalIncomplete = rows.filter((r) => r.status === "incomplete").length;
-  const totalCompleted = rows.filter((r) => r.status === "completed").length;
+  const totalWaiting = groups.filter((g) => g.mentoringStatus === "waiting").length;
+  const totalIncomplete = groups.filter((g) => g.mentoringStatus === "incomplete").length;
+  const totalCompleted = groups.filter((g) => g.mentoringStatus === "completed").length;
 
-  const filtered = rows.filter(({ group, currentStage, status }) => {
+  const filtered = groups.filter((group) => {
     const keyword = search.toLowerCase();
     const matchSearch =
       keyword === "" ||
@@ -63,9 +38,8 @@ export default function DosenMentoringFeedbackPage() {
       group.code.toLowerCase().includes(keyword) ||
       group.className.toLowerCase().includes(keyword) ||
       group.umkmName.toLowerCase().includes(keyword);
-    const matchStage = stageFilter === "all" || currentStage.id === stageFilter;
-    const matchStatus = statusFilter === "all" || status === statusFilter;
-    return matchSearch && matchStage && matchStatus;
+    const matchStatus = statusFilter === "all" || group.mentoringStatus === statusFilter;
+    return matchSearch && matchStatus;
   });
 
   return (
@@ -113,15 +87,15 @@ export default function DosenMentoringFeedbackPage() {
         <Select
           id="filter-tahap"
           options={STAGE_OPTIONS}
-          value={stageFilter}
-          onChange={(e) => setStageFilter(e.target.value)}
+          value="all"
+          disabled
           className="w-full sm:w-[200px]"
         />
         <Select
           id="filter-status"
           options={STATUS_OPTIONS}
           value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value as "all" | GroupMentoringStatus)}
+          onChange={(e) => setStatusFilter(e.target.value as "all" | KelompokMentoringStatus)}
           className="w-full sm:w-[190px]"
         />
       </FilterToolbar>
@@ -129,7 +103,7 @@ export default function DosenMentoringFeedbackPage() {
       <div className="min-w-0 rounded-2xl border border-soft-gray-dark bg-white p-6">
         {!isHydrated ? null : groups.length === 0 ? (
           <div className="py-10 text-center">
-            <p className="text-sm font-semibold text-navy">Belum ada kelompok bimbingan</p>
+            <p className="text-sm font-semibold text-navy">Belum ada laporan progress.</p>
             <p className="mt-1 text-sm text-muted">
               Kelompok yang ditambahkan melalui menu Project akan muncul di sini.
             </p>
@@ -141,7 +115,7 @@ export default function DosenMentoringFeedbackPage() {
           </div>
         ) : (
           <div className="flex flex-col divide-y divide-soft-gray-dark">
-            {filtered.map(({ group, currentStage, progress, status, totalReports }) => (
+            {filtered.map((group) => (
               <div
                 key={group.id}
                 className="grid grid-cols-1 items-center gap-4 py-5 first:pt-0 last:pb-0 lg:grid-cols-[minmax(0,1fr)_minmax(200px,240px)_minmax(160px,200px)]"
@@ -162,20 +136,24 @@ export default function DosenMentoringFeedbackPage() {
 
                 <div className="min-w-0">
                   <p className="text-xs text-muted">
-                    Tahap: <span className="font-medium text-navy">{currentStage.title}</span>
+                    Tahap: <span className="font-medium text-navy">-</span>
                   </p>
                   <div className="mt-1.5 flex items-center gap-3">
-                    <ProgressBar value={progress} showLabel={false} className="flex-1" />
-                    <span className="w-10 shrink-0 text-right text-sm font-semibold text-navy">{progress}%</span>
+                    <ProgressBar value={group.progress} showLabel={false} className="flex-1" />
+                    <span className="w-10 shrink-0 text-right text-sm font-semibold text-navy">
+                      {group.progress}%
+                    </span>
                   </div>
                 </div>
 
                 <div className="flex flex-col items-start gap-2 lg:items-end">
                   <div className="flex items-center gap-1.5 text-xs text-muted">
                     <FileText size={14} strokeWidth={2} />
-                    {totalReports} Laporan
+                    {group.reportCount} Laporan
                   </div>
-                  <Badge variant={GROUP_STATUS_BADGE_VARIANT[status]}>{GROUP_STATUS_LABEL[status]}</Badge>
+                  <Badge variant={ADMIN_GROUP_STATUS_VARIANT[group.mentoringStatus]}>
+                    {ADMIN_GROUP_STATUS_LABEL[group.mentoringStatus]}
+                  </Badge>
                   <Link href={`/dosen/mentoring-feedback/${group.id}`} className="w-full lg:w-auto">
                     <Button variant="secondary" size="sm" className="w-full lg:w-auto">
                       Lihat Mentoring

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Eye, EyeOff, Users, UserRound, GraduationCap, Store, Check } from "lucide-react";
@@ -13,15 +13,21 @@ import {
   type UserRole,
 } from "@/lib/adminUsersData";
 import { useAdminUsers } from "@/lib/useAdminUsers";
-import { useDosenSupervisedGroups } from "@/lib/useDosenSupervisedGroups";
-import { STUDY_PROGRAMS, CLASSES_BY_STUDY_PROGRAM } from "@/lib/dosenGroupsStorage";
-import type { GroupMemberRole } from "@/lib/dosenGroupsStorage";
+import { STUDY_PROGRAMS } from "@/lib/dosenGroupsStorage";
 import { supabase } from "@/lib/supabaseClient";
 
 /** Body sent to the `create-user` Edge Function — one shape per role, no extra fields. */
 type CreateUserPayload =
   | { role: "admin"; nama: string; email: string; password: string }
-  | { role: "dosen"; nama: string; nip: string; fakultas: string; password: string }
+  | {
+      role: "dosen";
+      nama: string;
+      nip: string;
+      fakultas: string;
+      jabatan: string;
+      mata_kuliah: string[];
+      password: string;
+    }
   | { role: "mahasiswa"; nama: string; nim: string; prodi: string; angkatan: number; password: string }
   | {
       role: "umkm";
@@ -31,6 +37,7 @@ type CreateUserPayload =
       sektor_usaha: string;
       alamat: string;
       deskripsi_usaha: string;
+      kontak: string;
       password: string;
     };
 
@@ -95,9 +102,7 @@ function errorClass(hasError: boolean) {
 
 export default function TambahPenggunaPage() {
   const router = useRouter();
-  const { users, isHydrated: usersHydrated, refetch } = useAdminUsers();
-  const { groups, isHydrated: groupsHydrated } = useDosenSupervisedGroups();
-  const isHydrated = usersHydrated && groupsHydrated;
+  const { users, isHydrated, refetch } = useAdminUsers();
 
   const [role, setRole] = useState<UserRole | null>(null);
 
@@ -120,9 +125,6 @@ export default function TambahPenggunaPage() {
   const [nim, setNim] = useState("");
   const [angkatan, setAngkatan] = useState("");
   const [prodiMhs, setProdiMhs] = useState("");
-  const [kelas, setKelas] = useState("");
-  const [kelompokId, setKelompokId] = useState("");
-  const [memberRole, setMemberRole] = useState<GroupMemberRole>("anggota");
 
   // umkm
   const [businessName, setBusinessName] = useState("");
@@ -135,36 +137,6 @@ export default function TambahPenggunaPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
-
-  const kelasOptions = useMemo(
-    () => (prodiMhs ? (CLASSES_BY_STUDY_PROGRAM[prodiMhs] ?? []) : []),
-    [prodiMhs]
-  );
-
-  const kelompokOptions = useMemo(
-    () => groups.filter((group) => group.studyProgram === prodiMhs && group.className === kelas),
-    [groups, prodiMhs, kelas]
-  );
-
-  const selectedGroup = kelompokOptions.find((group) => group.id === kelompokId);
-
-  function handleProdiMhsChange(value: string) {
-    setProdiMhs(value);
-    setKelas("");
-    setKelompokId("");
-    setMemberRole("anggota");
-  }
-
-  function handleKelasChange(value: string) {
-    setKelas(value);
-    setKelompokId("");
-    setMemberRole("anggota");
-  }
-
-  function handleKelompokChange(value: string) {
-    setKelompokId(value);
-    setMemberRole("anggota");
-  }
 
   function toggleMataKuliah(subject: string) {
     setMataKuliah((prev) => (prev.includes(subject) ? prev.filter((s) => s !== subject) : [...prev, subject]));
@@ -201,7 +173,6 @@ export default function TambahPenggunaPage() {
       else if (isNimTaken(nim, users)) errors.nim = "NIM sudah digunakan.";
       if (angkatan.trim() === "") errors.angkatan = "Angkatan wajib diisi.";
       if (prodiMhs === "") errors.prodiMhs = "Program studi wajib dipilih.";
-      if (kelas === "") errors.kelas = "Kelas wajib dipilih.";
     }
 
     if (role === "umkm") {
@@ -224,6 +195,8 @@ export default function TambahPenggunaPage() {
           nama: name.trim(),
           nip: nip.trim(),
           fakultas: prodiDosen,
+          jabatan: jabatan.trim(),
+          mata_kuliah: mataKuliah,
           password,
         };
       case "mahasiswa":
@@ -244,6 +217,7 @@ export default function TambahPenggunaPage() {
           sektor_usaha: businessSector,
           alamat: businessAddress.trim(),
           deskripsi_usaha: businessDescription.trim(),
+          kontak: phone.trim(),
           password,
         };
     }
@@ -263,9 +237,6 @@ export default function TambahPenggunaPage() {
     setNim("");
     setAngkatan("");
     setProdiMhs("");
-    setKelas("");
-    setKelompokId("");
-    setMemberRole("anggota");
     setBusinessName("");
     setBusinessSector(BUSINESS_SECTOR_OPTIONS[0].value);
     setBusinessAddress("");
@@ -275,7 +246,6 @@ export default function TambahPenggunaPage() {
   }
 
   async function handleSubmit(event: FormEvent) {
-    console.log("STEP 1: handleSubmit");
     event.preventDefault();
     setAttempted(true);
     setApiError(null);
@@ -285,21 +255,16 @@ export default function TambahPenggunaPage() {
     if (Object.keys(validationErrors).length > 0 || !role) {
       return;
     }
-    console.log("STEP 2: validation passed");
 
     setIsSubmitting(true);
 
-    console.log("STEP 3: building payload");
     const payload = buildPayload(role);
-    console.log(payload);
     const createdName = name.trim();
 
     try {
-      console.log("STEP 4: invoking edge function");
       const result = await supabase.functions.invoke<CreateUserResponse>("create-user", {
         body: payload,
       });
-      console.log(result);
 
       const { data, error } = result;
 
@@ -624,59 +589,14 @@ export default function TambahPenggunaPage() {
                             ...STUDY_PROGRAMS.map((p) => ({ value: p, label: p })),
                           ]}
                           value={prodiMhs}
-                          onChange={(e) => handleProdiMhsChange(e.target.value)}
+                          onChange={(e) => setProdiMhs(e.target.value)}
                           className={errorClass(!!errors.prodiMhs)}
                         />
                         <FieldError message={errors.prodiMhs} />
                       </div>
-                      <div>
-                        <Select
-                          label="Kelas"
-                          id="kelas"
-                          options={[
-                            { value: "", label: prodiMhs ? "Pilih kelas" : "Pilih program studi dahulu" },
-                            ...kelasOptions.map((c) => ({ value: c, label: c })),
-                          ]}
-                          value={kelas}
-                          onChange={(e) => handleKelasChange(e.target.value)}
-                          disabled={!prodiMhs}
-                          className={errorClass(!!errors.kelas)}
-                        />
-                        <FieldError message={errors.kelas} />
-                        {!prodiMhs && <p className="mt-1 text-xs text-muted">Pilih program studi terlebih dahulu.</p>}
-                      </div>
-                      <div>
-                        <Select
-                          label="Kelompok"
-                          id="kelompok"
-                          options={[
-                            { value: "", label: kelas ? "Belum tergabung kelompok" : "Pilih kelas dahulu" },
-                            ...kelompokOptions.map((g) => ({ value: g.id, label: g.code })),
-                          ]}
-                          value={kelompokId}
-                          onChange={(e) => handleKelompokChange(e.target.value)}
-                          disabled={!kelas}
-                        />
-                        {!kelas && <p className="mt-1 text-xs text-muted">Pilih kelas terlebih dahulu.</p>}
-                        {kelas && <p className="mt-1 text-xs text-muted">Kelompok boleh dikosongkan jika mahasiswa baru dibuat.</p>}
-                      </div>
-                      <div>
-                        <Select
-                          label="Peran dalam Kelompok"
-                          id="member-role"
-                          options={[
-                            { value: "anggota", label: "Anggota" },
-                            { value: "ketua", label: "Ketua/Perwakilan" },
-                          ]}
-                          value={memberRole}
-                          onChange={(e) => setMemberRole(e.target.value as GroupMemberRole)}
-                          disabled={!kelompokId}
-                        />
-                        <p className="mt-1 text-xs text-muted">
-                          Ketua/perwakilan dapat mengunggah laporan kelompok. Anggota dapat melihat progress dan
-                          feedback.
-                        </p>
-                      </div>
+                      <p className="text-xs text-muted sm:col-span-2">
+                        Mahasiswa akan tergabung ke kelompok bimbingan begitu Dosen memasukkannya ke sebuah kelompok.
+                      </p>
                     </div>
                   )}
 
@@ -788,24 +708,6 @@ export default function TambahPenggunaPage() {
               <dt className="text-muted">Identitas Utama</dt>
               <dd className="font-medium text-navy">{identityPreview}</dd>
             </div>
-            {role === "mahasiswa" && (
-              <>
-                <div className="flex items-center justify-between gap-2">
-                  <dt className="text-muted">Kelas</dt>
-                  <dd className="font-medium text-navy">{kelas || "-"}</dd>
-                </div>
-                <div className="flex items-center justify-between gap-2">
-                  <dt className="text-muted">Kelompok</dt>
-                  <dd className="font-medium text-navy">{selectedGroup?.code ?? "Belum ada"}</dd>
-                </div>
-                <div className="flex items-center justify-between gap-2">
-                  <dt className="text-muted">Peran Kelompok</dt>
-                  <dd className="font-medium text-navy">
-                    {selectedGroup ? (memberRole === "ketua" ? "Ketua/Perwakilan" : "Anggota") : "-"}
-                  </dd>
-                </div>
-              </>
-            )}
           </dl>
         </Card>
       </div>

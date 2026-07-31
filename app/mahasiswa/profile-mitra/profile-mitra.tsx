@@ -2,9 +2,7 @@
 
 import { Store, MapPin, ImageIcon } from "lucide-react";
 import { Card, CardHeader, CardTitle } from "@/components/ui";
-import { useDosenSupervisedGroups } from "@/lib/useDosenSupervisedGroups";
-import { useUmkmMaster } from "@/lib/useAdminMasterData";
-import { getCurrentDemoUser, getActiveMahasiswaGroup } from "@/lib/demoSession";
+import { useMahasiswaKelompok } from "@/lib/useMahasiswaKelompok";
 
 function DetailRow({ label, value }: { label: string; value: string }) {
   return (
@@ -16,19 +14,13 @@ function DetailRow({ label, value }: { label: string; value: string }) {
 }
 
 export default function ProfileMitraPage() {
-  const { groups, isHydrated: groupsHydrated } = useDosenSupervisedGroups();
-  const { umkmMasterList, isHydrated: umkmHydrated } = useUmkmMaster();
-  const isHydrated = groupsHydrated && umkmHydrated;
+  const { activeGroup, isHydrated } = useMahasiswaKelompok();
 
   if (!isHydrated) {
     return null;
   }
 
-  const activeUser = getCurrentDemoUser("mahasiswa");
-  const activeGroup = activeUser ? getActiveMahasiswaGroup(activeUser, groups) : undefined;
-  const umkm = activeGroup ? umkmMasterList.find((u) => u.namaUsaha === activeGroup.umkmName) : undefined;
-
-  if (!activeGroup || !umkm) {
+  if (!activeGroup || !activeGroup.umkmId) {
     return (
       <Card className="flex flex-col items-center justify-center gap-2 rounded-2xl p-12 text-center">
         <span className="flex h-14 w-14 items-center justify-center rounded-full bg-purple/10 text-purple">
@@ -59,9 +51,9 @@ export default function ProfileMitraPage() {
             </span>
           </CardHeader>
           <div className="flex flex-col gap-2">
-            <DetailRow label="Nama" value={umkm.namaUsaha} />
-            <DetailRow label="Pemilik" value={umkm.namaPemilik} />
-            <DetailRow label="Sektor" value={umkm.sektorUsaha} />
+            <DetailRow label="Nama" value={activeGroup.umkmName} />
+            <DetailRow label="Pemilik" value={activeGroup.umkmOwnerName} />
+            <DetailRow label="Sektor" value={activeGroup.umkmSector} />
             <DetailRow label="Kelompok" value={activeGroup.code} />
           </div>
         </Card>
@@ -73,15 +65,15 @@ export default function ProfileMitraPage() {
               <MapPin size={20} strokeWidth={2} />
             </span>
           </CardHeader>
-          <p className="text-sm leading-relaxed text-navy">{umkm.alamat}</p>
+          <p className="text-sm leading-relaxed text-navy">{activeGroup.umkmAddress}</p>
         </Card>
       </div>
 
       {/* Deskripsi Usaha */}
       <Card>
         <CardTitle className="mb-3 text-lg">Deskripsi Usaha</CardTitle>
-        {umkm.deskripsiUsaha ? (
-          <p className="text-sm leading-relaxed text-navy">{umkm.deskripsiUsaha}</p>
+        {activeGroup.umkmDescription ? (
+          <p className="text-sm leading-relaxed text-navy">{activeGroup.umkmDescription}</p>
         ) : (
           <p className="text-sm text-muted">Belum ada deskripsi usaha yang diinput.</p>
         )}

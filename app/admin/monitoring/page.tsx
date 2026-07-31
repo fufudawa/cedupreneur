@@ -5,25 +5,13 @@ import Link from "next/link";
 import { ArrowLeft, Layers, FileText, MessageSquare, Users } from "lucide-react";
 import { PageHeader, StatCard } from "@/components/shared";
 import { Card, Badge, Button, Input, Select, ProgressBar } from "@/components/ui";
-import { useDosenSupervisedGroups } from "@/lib/useDosenSupervisedGroups";
-import { useDosenProgressReports } from "@/lib/useDosenProgressReports";
-import {
-  MENTORING_MILESTONES,
-  getCurrentStage,
-  calculateGroupProgress,
-} from "@/lib/dosenProgressReportsStorage";
+import { useAdminMonitoring } from "@/lib/useAdminMonitoring";
 import {
   getAdminGroupStatus,
   ADMIN_GROUP_STATUS_LABEL,
   ADMIN_GROUP_STATUS_VARIANT,
   type AdminGroupStatus,
 } from "@/lib/adminDashboardData";
-import { UMKM_OPTIONS } from "@/lib/dosenGroupsStorage";
-
-const STAGE_OPTIONS = [
-  { value: "all", label: "Semua Tahap" },
-  ...MENTORING_MILESTONES.map((milestone) => ({ value: milestone.id, label: milestone.title })),
-];
 
 const STATUS_OPTIONS: { value: "all" | AdminGroupStatus; label: string }[] = [
   { value: "all", label: "Semua Status" },
@@ -31,11 +19,6 @@ const STATUS_OPTIONS: { value: "all" | AdminGroupStatus; label: string }[] = [
   { value: "incomplete", label: "Belum Tuntas" },
   { value: "completed", label: "Tuntas" },
   { value: "empty", label: "Belum Ada Laporan" },
-];
-
-const UMKM_FILTER_OPTIONS = [
-  { value: "all", label: "Semua UMKM" },
-  ...UMKM_OPTIONS.map((umkm) => ({ value: umkm.name, label: umkm.name })),
 ];
 
 const PAGE_SIZE = 10;
@@ -49,13 +32,10 @@ function formatShortDate(iso: string) {
 }
 
 export default function AdminMonitoringPage() {
-  const { groups, isHydrated: groupsHydrated } = useDosenSupervisedGroups();
-  const { reports, isHydrated: reportsHydrated } = useDosenProgressReports();
-  const isHydrated = groupsHydrated && reportsHydrated;
+  const { groups, isHydrated } = useAdminMonitoring();
 
   const [search, setSearch] = useState("");
   const [classFilter, setClassFilter] = useState("all");
-  const [stageFilter, setStageFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<"all" | AdminGroupStatus>("all");
   const [umkmFilter, setUmkmFilter] = useState("all");
   const [page, setPage] = useState(1);
@@ -71,29 +51,33 @@ export default function AdminMonitoringPage() {
     [groups]
   );
 
-  const projectAktif = MENTORING_MILESTONES.length;
-  const laporanMasuk = reports.length;
-  const menungguFeedback = reports.filter((r) => r.status === "submitted").length;
-  const kelompokAktif = groups.filter((group) => group.status === "progress").length;
+  const umkmOptions = useMemo(
+    () => [
+      { value: "all", label: "Semua UMKM" },
+      ...Array.from(new Set(groups.map((group) => group.umkmName))).map((name) => ({ value: name, label: name })),
+    ],
+    [groups]
+  );
+
+  const projectAktif = new Set(groups.map((g) => g.projectId)).size;
+  const laporanMasuk = groups.reduce((sum, g) => sum + g.laporan.filter((l) => l.status !== "draft").length, 0);
+  const menungguFeedback = groups.reduce(
+    (sum, g) => sum + g.laporan.filter((l) => l.status === "submitted").length,
+    0
+  );
+  const kelompokAktif = groups.filter((group) => group.status === "aktif").length;
 
   const rows = useMemo(
     () =>
-      groups.map((group) => {
-        const latestReport = reports
-          .filter((report) => report.groupId === group.id)
-          .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime())[0];
-        return {
-          group,
-          currentStage: getCurrentStage(group.id, MENTORING_MILESTONES, reports),
-          progress: calculateGroupProgress(group.id, MENTORING_MILESTONES, reports),
-          status: getAdminGroupStatus(group.id, MENTORING_MILESTONES, reports),
-          latestReport,
-        };
-      }),
-    [groups, reports]
+      groups.map((group) => ({
+        group,
+        status: getAdminGroupStatus(group),
+        latestLaporan: group.laporan.find((l) => l.status !== "draft"),
+      })),
+    [groups]
   );
 
-  const filtered = rows.filter(({ group, currentStage, status }) => {
+  const filtered = rows.filter(({ group, status }) => {
     const keyword = search.toLowerCase();
     const matchSearch =
       keyword === "" ||
@@ -101,10 +85,9 @@ export default function AdminMonitoringPage() {
       group.className.toLowerCase().includes(keyword) ||
       group.umkmName.toLowerCase().includes(keyword);
     const matchClass = classFilter === "all" || group.className === classFilter;
-    const matchStage = stageFilter === "all" || currentStage.id === stageFilter;
     const matchStatus = statusFilter === "all" || status === statusFilter;
     const matchUmkm = umkmFilter === "all" || group.umkmName === umkmFilter;
-    return matchSearch && matchClass && matchStage && matchStatus && matchUmkm;
+    return matchSearch && matchClass && matchStatus && matchUmkm;
   });
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -166,7 +149,7 @@ export default function AdminMonitoringPage() {
       <Card className="min-w-0 rounded-2xl p-6">
         <h2 className="text-lg font-semibold text-navy">Monitoring Progress</h2>
 
-        <div className="mt-4 mb-4 grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-[minmax(260px,1.4fr)_140px_170px_170px_170px]">
+        <div className="mt-4 mb-4 grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-[minmax(260px,1.4fr)_170px_170px_170px]">
           <Input
             id="search-monitoring"
             placeholder="Cari kelompok, kelas, atau UMKM..."
@@ -186,15 +169,6 @@ export default function AdminMonitoringPage() {
             }}
           />
           <Select
-            id="filter-tahap-monitoring"
-            options={STAGE_OPTIONS}
-            value={stageFilter}
-            onChange={(e) => {
-              setStageFilter(e.target.value);
-              resetPage();
-            }}
-          />
-          <Select
             id="filter-status-monitoring"
             options={STATUS_OPTIONS}
             value={statusFilter}
@@ -205,7 +179,7 @@ export default function AdminMonitoringPage() {
           />
           <Select
             id="filter-umkm-monitoring"
-            options={UMKM_FILTER_OPTIONS}
+            options={umkmOptions}
             value={umkmFilter}
             onChange={(e) => {
               setUmkmFilter(e.target.value);
@@ -226,7 +200,6 @@ export default function AdminMonitoringPage() {
                   <th className="rounded-l-xl px-4 py-2.5 font-medium text-navy">Kelompok</th>
                   <th className="px-4 py-2.5 font-medium text-navy">Kelas</th>
                   <th className="px-4 py-2.5 font-medium text-navy">UMKM</th>
-                  <th className="px-4 py-2.5 font-medium text-navy">Tahap Saat Ini</th>
                   <th className="px-4 py-2.5 font-medium text-navy">Progress</th>
                   <th className="px-4 py-2.5 font-medium text-navy">Status</th>
                   <th className="px-4 py-2.5 font-medium text-navy">Laporan Terakhir</th>
@@ -234,26 +207,25 @@ export default function AdminMonitoringPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-soft-gray-dark">
-                {paginated.map(({ group, currentStage, progress, status, latestReport }) => (
+                {paginated.map(({ group, status, latestLaporan }) => (
                   <tr key={group.id}>
                     <td className="px-4 py-3 font-medium text-navy">{group.code}</td>
                     <td className="px-4 py-3 text-muted">{group.className}</td>
                     <td className="px-4 py-3 text-muted">{group.umkmName}</td>
-                    <td className="px-4 py-3 text-muted">{currentStage.title}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
-                        <ProgressBar value={progress} showLabel={false} className="w-24" />
-                        <span className="w-9 shrink-0 text-xs font-semibold text-navy">{progress}%</span>
+                        <ProgressBar value={group.progress} showLabel={false} className="w-24" />
+                        <span className="w-9 shrink-0 text-xs font-semibold text-navy">{group.progress}%</span>
                       </div>
                     </td>
                     <td className="px-4 py-3">
                       <Badge variant={ADMIN_GROUP_STATUS_VARIANT[status]}>{ADMIN_GROUP_STATUS_LABEL[status]}</Badge>
                     </td>
                     <td className="px-4 py-3 text-muted">
-                      {latestReport ? (
+                      {latestLaporan ? (
                         <>
-                          <p className="text-navy">{latestReport.milestoneTitle}</p>
-                          <p className="text-xs">{formatShortDate(latestReport.submittedAt)}</p>
+                          <p className="text-navy">{latestLaporan.judulLaporan}</p>
+                          <p className="text-xs">{formatShortDate(latestLaporan.tanggalSubmit ?? latestLaporan.createdAt ?? "")}</p>
                         </>
                       ) : (
                         "Belum ada laporan"

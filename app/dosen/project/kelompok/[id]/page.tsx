@@ -6,17 +6,12 @@ import Link from "next/link";
 import { ArrowLeft, MessageSquareText } from "lucide-react";
 import { PageHeader } from "@/components/shared";
 import { Card, Badge, Button, ProgressBar } from "@/components/ui";
-import { useDosenSupervisedGroups } from "@/lib/useDosenSupervisedGroups";
-import { useDosenProgressReports } from "@/lib/useDosenProgressReports";
-import { MENTORING_MILESTONES, getCurrentStage, calculateGroupProgress } from "@/lib/dosenProgressReportsStorage";
-import { getAdminGroupStatus, ADMIN_GROUP_STATUS_LABEL, ADMIN_GROUP_STATUS_VARIANT } from "@/lib/adminDashboardData";
-import { UMKM_OPTIONS } from "@/lib/dosenGroupsStorage";
+import { useDosenKelompokBimbingan } from "@/lib/useDosenKelompokBimbingan";
+import { ADMIN_GROUP_STATUS_LABEL, ADMIN_GROUP_STATUS_VARIANT } from "@/lib/adminDashboardData";
 
 export default function DetailKelompokPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const { groups, isHydrated: groupsHydrated } = useDosenSupervisedGroups();
-  const { reports, isHydrated: reportsHydrated } = useDosenProgressReports();
-  const isHydrated = groupsHydrated && reportsHydrated;
+  const { groups, isHydrated } = useDosenKelompokBimbingan();
 
   if (!isHydrated) {
     return null;
@@ -27,31 +22,29 @@ export default function DetailKelompokPage({ params }: { params: Promise<{ id: s
     notFound();
   }
 
-  const currentStage = getCurrentStage(group.id, MENTORING_MILESTONES, reports);
-  const progress = calculateGroupProgress(group.id, MENTORING_MILESTONES, reports);
-  const status = getAdminGroupStatus(group.id, MENTORING_MILESTONES, reports);
-  const umkmAddress = UMKM_OPTIONS.find((u) => u.id === group.umkmId)?.address ?? "-";
-
   const detailRows: { label: string; value: ReactNode }[] = [
     { label: "Nama Kelompok", value: group.name },
     { label: "Kelas", value: group.className },
     { label: "Program Studi", value: group.studyProgram },
-    { label: "Semester", value: "Tiga" },
-    { label: "Mata Kuliah", value: "PMW" },
+    { label: "Semester", value: group.semester },
+    { label: "Mata Kuliah", value: group.mataKuliah },
     {
       label: "Anggota Kelompok",
-      value: (
-        <ol className="flex flex-col gap-1">
-          {group.members.map((member, index) => (
-            <li key={`${member.name}-${member.nim}`}>
-              {index + 1}. {member.name} ({member.nim})
-            </li>
-          ))}
-        </ol>
-      ),
+      value:
+        group.members.length === 0 ? (
+          <span className="text-muted">Belum ada mahasiswa bimbingan.</span>
+        ) : (
+          <ol className="flex flex-col gap-1">
+            {group.members.map((member, index) => (
+              <li key={`${member.name}-${member.nim}`}>
+                {index + 1}. {member.name} ({member.nim})
+              </li>
+            ))}
+          </ol>
+        ),
     },
     { label: "Mitra UMKM", value: group.umkmName },
-    { label: "Alamat Mitra UMKM", value: umkmAddress },
+    { label: "Alamat Mitra UMKM", value: group.umkmAddress },
   ];
 
   return (
@@ -76,15 +69,17 @@ export default function DetailKelompokPage({ params }: { params: Promise<{ id: s
             <p className="mt-1 text-sm text-muted">{group.umkmName}</p>
             <p className="mt-0.5 text-sm text-muted">{group.period}</p>
           </div>
-          <Badge variant={ADMIN_GROUP_STATUS_VARIANT[status]}>{ADMIN_GROUP_STATUS_LABEL[status]}</Badge>
+          <Badge variant={ADMIN_GROUP_STATUS_VARIANT[group.mentoringStatus]}>
+            {ADMIN_GROUP_STATUS_LABEL[group.mentoringStatus]}
+          </Badge>
         </div>
 
         <div className="mt-5 flex items-center gap-4">
-          <ProgressBar value={progress} showLabel={false} className="flex-1" />
-          <span className="shrink-0 text-lg font-bold text-navy">{progress}%</span>
+          <ProgressBar value={group.progress} showLabel={false} className="flex-1" />
+          <span className="shrink-0 text-lg font-bold text-navy">{group.progress}%</span>
         </div>
         <p className="mt-2 text-sm text-muted">
-          Tahap saat ini: <span className="font-medium text-navy">{currentStage.title}</span>
+          Tahap saat ini: <span className="font-medium text-navy">-</span>
         </p>
 
         <div className="my-6 h-px bg-soft-gray-dark" />

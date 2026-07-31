@@ -1,15 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { PageHeader, NoteItem } from "@/components/shared";
 import { Card, Input, Select, Button, Textarea, FilterToolbar } from "@/components/ui";
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentProfile } from "@/lib/auth";
 import { getNotesStorageKey, sortNotesByLatest, type PersonalNote } from "@/lib/notesStorage";
 import { useNotesStore } from "@/lib/useNotesStore";
+import { useMahasiswaKelompok } from "@/lib/useMahasiswaKelompok";
 
-const projectDetail = { kelas: "RJ24D" };
 const NOTES_MAX_LENGTH = 500;
 
 const FILTER_OPTIONS = [
@@ -19,8 +19,27 @@ const FILTER_OPTIONS = [
 ];
 
 export default function AllNotesPage() {
-  const currentUser = getCurrentUser("mahasiswa");
-  const notesKey = getNotesStorageKey(currentUser.name, projectDetail.kelas);
+  const { activeGroup, isHydrated: groupHydrated } = useMahasiswaKelompok();
+  const [profileId, setProfileId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    getCurrentProfile()
+      .then((profile) => {
+        if (isMounted) setProfileId(profile.id);
+      })
+      .catch((error) => {
+        console.error("Failed to load current profile", error);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Kunci storage yang sama persis dengan yang dipakai widget Catatan Pribadi
+  // di Dashboard (profile.id asli + kelas asli dari kelompok), supaya catatan
+  // tidak "hilang" antara kedua halaman ini.
+  const notesKey = getNotesStorageKey(profileId ?? "mahasiswa", activeGroup?.className ?? "-");
   const { notes, updateNote, removeNote, toggleComplete } = useNotesStore(notesKey);
 
   const [search, setSearch] = useState("");
@@ -54,6 +73,10 @@ export default function AllNotesPage() {
     setEditingId(null);
     setEditingDraft("");
   };
+
+  if (!groupHydrated) {
+    return null;
+  }
 
   return (
     <div>

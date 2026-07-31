@@ -5,14 +5,8 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { PageHeader } from "@/components/shared";
-import { Card, Input, Select, Textarea, Button } from "@/components/ui";
-import { createMataKuliahId, isKodeMataKuliahTaken, type ActiveStatus, type MataKuliah, type Semester } from "@/lib/adminMasterData";
+import { Card, Input, Button } from "@/components/ui";
 import { useMataKuliah } from "@/lib/useAdminMasterData";
-
-const SEMESTER_OPTIONS: { value: Semester; label: string }[] = [
-  { value: "Ganjil", label: "Ganjil" },
-  { value: "Genap", label: "Genap" },
-];
 
 function FieldError({ message }: { message?: string }) {
   if (!message) return null;
@@ -30,19 +24,18 @@ export default function TambahMataKuliahPage() {
   const [kode, setKode] = useState("");
   const [nama, setNama] = useState("");
   const [sks, setSks] = useState("3");
-  const [semester, setSemester] = useState<Semester>("Ganjil");
-  const [tahunAjaran, setTahunAjaran] = useState("2026/2027");
-  const [status, setStatus] = useState<ActiveStatus>("aktif");
-  const [deskripsi, setDeskripsi] = useState("");
 
   const [attempted, setAttempted] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   function validate(): Record<string, string> {
     const errors: Record<string, string> = {};
     if (kode.trim() === "") errors.kode = "Kode mata kuliah wajib diisi.";
     else if (kode.trim().length > 20) errors.kode = "Kode maksimal 20 karakter.";
-    else if (isKodeMataKuliahTaken(kode, mataKuliah)) errors.kode = "Kode mata kuliah sudah digunakan.";
+    else if (mataKuliah.some((m) => m.kode.toUpperCase() === kode.trim().toUpperCase()))
+      errors.kode = "Kode mata kuliah sudah digunakan.";
 
     if (nama.trim() === "") errors.nama = "Nama mata kuliah wajib diisi.";
 
@@ -50,35 +43,29 @@ export default function TambahMataKuliahPage() {
     if (sks.trim() === "" || Number.isNaN(sksNumber)) errors.sks = "SKS wajib diisi dengan angka.";
     else if (sksNumber < 1 || sksNumber > 6) errors.sks = "SKS antara 1 sampai 6.";
 
-    if (!/^\d{4}\/\d{4}$/.test(tahunAjaran.trim())) errors.tahunAjaran = "Format tahun ajaran contoh: 2026/2027.";
-
-    if (deskripsi.length > 500) errors.deskripsi = "Deskripsi maksimal 500 karakter.";
-
     return errors;
   }
 
   const errors = attempted ? validate() : {};
 
-  function handleSubmit(event: FormEvent) {
+  async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setAttempted(true);
+    setSubmitError("");
+    if (isSubmitting) return;
     const validationErrors = validate();
     if (Object.keys(validationErrors).length > 0) return;
 
-    const newItem: MataKuliah = {
-      id: createMataKuliahId(mataKuliah),
-      kode: kode.trim().toUpperCase(),
-      nama: nama.trim(),
-      sks: Number(sks),
-      semester,
-      tahunAjaran: tahunAjaran.trim(),
-      status,
-      deskripsi: deskripsi.trim() || undefined,
-    };
-
-    addMataKuliah(newItem);
-    setSuccessMessage(`Mata kuliah ${newItem.nama} berhasil ditambahkan.`);
-    setTimeout(() => router.push("/admin/data-master"), 700);
+    setIsSubmitting(true);
+    try {
+      await addMataKuliah({ kode: kode.trim().toUpperCase(), nama: nama.trim(), sks: Number(sks) });
+      setSuccessMessage(`Mata kuliah ${nama.trim()} berhasil ditambahkan.`);
+      setTimeout(() => router.push("/admin/data-master"), 700);
+    } catch (error) {
+      console.error("Failed to add mata kuliah", error);
+      setSubmitError("Gagal menyimpan mata kuliah. Silakan coba lagi.");
+      setIsSubmitting(false);
+    }
   }
 
   if (!isHydrated) {
@@ -139,48 +126,9 @@ export default function TambahMataKuliahPage() {
               />
               <FieldError message={errors.sks} />
             </div>
-            <Select
-              label="Semester"
-              id="semester"
-              options={SEMESTER_OPTIONS}
-              value={semester}
-              onChange={(e) => setSemester(e.target.value as Semester)}
-            />
-            <div>
-              <Input
-                label="Tahun Ajaran"
-                id="tahun-ajaran"
-                placeholder="2026/2027"
-                value={tahunAjaran}
-                onChange={(e) => setTahunAjaran(e.target.value)}
-                className={errorClass(!!errors.tahunAjaran)}
-              />
-              <FieldError message={errors.tahunAjaran} />
-            </div>
-            <Select
-              label="Status Mata Kuliah"
-              id="status"
-              options={[
-                { value: "aktif", label: "Aktif" },
-                { value: "tidak_aktif", label: "Tidak Aktif" },
-              ]}
-              value={status}
-              onChange={(e) => setStatus(e.target.value as ActiveStatus)}
-            />
           </div>
 
-          <div>
-            <Textarea
-              label="Deskripsi Mata Kuliah"
-              id="deskripsi"
-              placeholder="Deskripsi singkat mata kuliah (opsional)"
-              maxLength={500}
-              value={deskripsi}
-              onChange={(e) => setDeskripsi(e.target.value)}
-            />
-            <FieldError message={errors.deskripsi} />
-          </div>
-
+          {submitError && <p className="text-sm font-medium text-red-500">{submitError}</p>}
           {successMessage && (
             <p className="rounded-xl bg-green-50 px-4 py-3 text-sm font-medium text-green-700">
               {successMessage} Mengarahkan ke Data Master...
@@ -188,8 +136,8 @@ export default function TambahMataKuliahPage() {
           )}
 
           <div className="flex flex-wrap gap-3">
-            <Button type="submit" variant="secondary">
-              Simpan Mata Kuliah
+            <Button type="submit" variant="secondary" disabled={isSubmitting}>
+              {isSubmitting ? "Menyimpan..." : "Simpan Mata Kuliah"}
             </Button>
             <Link href="/admin/data-master">
               <Button type="button" variant="outline">

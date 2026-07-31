@@ -3,108 +3,37 @@
 import { useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Plus } from "lucide-react";
-import { Select } from "@/components/ui";
-import { useDosenSupervisedGroups } from "@/lib/useDosenSupervisedGroups";
-import { useDosenProgressReports } from "@/lib/useDosenProgressReports";
-import { MENTORING_MILESTONES, getMilestoneReport } from "@/lib/dosenProgressReportsStorage";
-import { getCurrentDemoUser, getActiveMahasiswaGroup } from "@/lib/demoSession";
-
-const MILESTONE_OPTIONS = [
-  { value: "", label: "Pilih tahap/milestone..." },
-  ...MENTORING_MILESTONES.map((milestone) => ({ value: milestone.id, label: milestone.title })),
-];
+import { Input } from "@/components/ui";
+import { supabase } from "@/lib/supabaseClient";
+import { useMahasiswaKelompok } from "@/lib/useMahasiswaKelompok";
 
 export default function UploadProgressPage() {
   const router = useRouter();
-  const { groups, isHydrated: groupsHydrated } = useDosenSupervisedGroups();
-  const { reports, isHydrated: reportsHydrated, addReport, updateReport } = useDosenProgressReports();
-  const isHydrated = groupsHydrated && reportsHydrated;
+  const { activeGroup, isHydrated } = useMahasiswaKelompok();
 
   const [isDragging, setIsDragging] = useState(false);
-  const [files, setFiles] = useState<File[]>([]);
+  const [file, setFile] = useState<File | null>(null);
+  const [judul, setJudul] = useState("");
+  const [progress, setProgress] = useState("");
   const [comment, setComment] = useState("");
-  const [milestoneId, setMilestoneId] = useState("");
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [justSubmitted, setJustSubmitted] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const addFiles = useCallback((fileList: FileList | null) => {
-    if (!fileList) return;
-    setFiles((prev) => [...prev, ...Array.from(fileList)]);
+  const pickFile = useCallback((fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    setFile(fileList[0]);
   }, []);
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setIsDragging(false);
-    addFiles(e.dataTransfer.files);
+    pickFile(e.dataTransfer.files);
   };
 
   if (!isHydrated) {
     return null;
-  }
-
-  const activeUser = getCurrentDemoUser("mahasiswa");
-  const activeGroup = activeUser ? getActiveMahasiswaGroup(activeUser, groups) : undefined;
-  const existingReport =
-    activeGroup && milestoneId ? getMilestoneReport(activeGroup.id, milestoneId, reports) : null;
-  const isRevision = existingReport !== null && existingReport.status === "revision_required";
-
-  // Temporary frontend-only demo upload.
-  // Replace with real file storage/backend when connected — for now only
-  // file metadata (name/type) is persisted, never a fake blob/download URL.
-  function handleUpload() {
-    if (isSubmitting) return;
-
-    if (!activeGroup) {
-      setError("Anda belum terhubung dengan kelompok. Hubungi dosen/admin.");
-      return;
-    }
-    if (milestoneId === "") {
-      setError("Pilih tahap/milestone terlebih dahulu.");
-      return;
-    }
-    if (files.length === 0) {
-      setError("Pilih minimal satu file.");
-      return;
-    }
-
-    setError("");
-    setIsSubmitting(true);
-
-    const milestone = MENTORING_MILESTONES.find((m) => m.id === milestoneId);
-    const now = new Date().toISOString();
-    const fileName = files.map((file) => file.name).join(", ");
-    const fileType = files[0]?.name.split(".").pop()?.toUpperCase() ?? "FILE";
-
-    if (existingReport) {
-      updateReport(existingReport.id, {
-        fileName,
-        fileType,
-        submittedBy: activeUser?.name ?? existingReport.submittedBy,
-        submittedAt: now,
-        comment,
-        status: "submitted",
-        revisionNumber: (existingReport.revisionNumber ?? 1) + 1,
-      });
-    } else {
-      addReport({
-        id: `report-${activeGroup.id}-${milestoneId}-${Date.now()}`,
-        groupId: activeGroup.id,
-        milestoneId,
-        milestoneTitle: milestone?.title ?? "",
-        fileName,
-        fileType,
-        submittedBy: activeUser?.name ?? "Mahasiswa",
-        submittedAt: now,
-        comment,
-        status: "submitted",
-        revisionNumber: 1,
-      });
-    }
-
-    setJustSubmitted(true);
-    setTimeout(() => router.push(`/mahasiswa/project/history/${milestoneId}`), 700);
   }
 
   if (!activeGroup) {
@@ -120,30 +49,106 @@ export default function UploadProgressPage() {
     );
   }
 
+  async function handleUpload() {
+    if (isSubmitting || !activeGroup) return;
+
+    const judulTrimmed = judul.trim();
+    const progressNumber = Number(progress);
+
+    if (judulTrimmed === "") {
+      setError("Judul laporan wajib diisi.");
+      return;
+    }
+    if (progress === "" || Number.isNaN(progressNumber) || progressNumber < 0 || progressNumber > 100) {
+      setError("Persentase progress harus berupa angka 0-100.");
+      return;
+    }
+    if (!file) {
+      setError("Pilih file laporan terlebih dahulu.");
+      return;
+    }
+
+    setError("");
+    setIsSubmitting(true);
+
+    try {
+      const { data: inserted, error: insertError } = await supabase
+        .from("laporan_progress")
+        .insert({
+          kelompok_id: activeGroup.id,
+          judul_laporan: judulTrimmed,
+          isi_laporan: comment.trim() || null,
+          persentase_progress: progressNumber,
+          status: "draft",
+        })
+        .select("id")
+        .single();
+      if (insertError) throw insertError;
+
+      const laporanId = inserted.id as string;
+      const filePath = `${activeGroup.id}/${laporanId}/${file.name}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("laporan-progress")
+        .upload(filePath, file, { upsert: true });
+      if (uploadError) throw uploadError;
+
+      const { error: updateError } = await supabase
+        .from("laporan_progress")
+        .update({ file_url: filePath, status: "submitted", tanggal_submit: new Date().toISOString() })
+        .eq("id", laporanId);
+      if (updateError) throw updateError;
+
+      setJustSubmitted(true);
+      setTimeout(() => router.push(`/mahasiswa/project/history/${laporanId}`), 700);
+    } catch (err) {
+      console.error("Failed to submit laporan progress:", err);
+      setError("Gagal mengirim laporan. Silakan coba lagi.");
+      setIsSubmitting(false);
+    }
+  }
+
   return (
     <div>
-      {/* Milestone selector */}
+      {/* Judul & Progress */}
       <div className="rounded-3xl bg-white p-8 shadow-sm ring-1 ring-slate-100">
-        <h2 className="text-xl font-bold text-slate-900">Pilih Tahap/Milestone</h2>
+        <h2 className="text-xl font-bold text-slate-900">Detail Laporan</h2>
         <p className="mt-1 text-sm text-slate-400">
           Kelompok: {activeGroup.code} &middot; {activeGroup.umkmName}
         </p>
-        <div className="mt-4 max-w-md">
-          <Select
-            id="milestone"
-            options={MILESTONE_OPTIONS}
-            value={milestoneId}
-            onChange={(e) => {
-              setMilestoneId(e.target.value);
-              setError("");
-            }}
-          />
+        <div className="mt-4 grid max-w-md gap-4">
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-slate-700" htmlFor="judul-laporan">
+              Judul Laporan
+            </label>
+            <Input
+              id="judul-laporan"
+              placeholder="Contoh: Progress riset target market"
+              value={judul}
+              onChange={(e) => {
+                setJudul(e.target.value);
+                setError("");
+              }}
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-slate-700" htmlFor="progress-persen">
+              Progress (%)
+            </label>
+            <Input
+              id="progress-persen"
+              type="number"
+              min={0}
+              max={100}
+              placeholder="0 - 100"
+              value={progress}
+              onChange={(e) => {
+                setProgress(e.target.value);
+                setError("");
+              }}
+            />
+          </div>
         </div>
-        {isRevision && (
-          <p className="mt-2 text-xs font-medium text-orange">
-            Tahap ini sebelumnya berstatus Belum Tuntas — mengunggah di sini akan dikirim sebagai revisi.
-          </p>
-        )}
       </div>
 
       {/* Add File Progress */}
@@ -166,42 +171,33 @@ export default function UploadProgressPage() {
           <input
             ref={inputRef}
             type="file"
-            multiple
             className="hidden"
             accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.png,.jpg,.jpeg"
-            onChange={(e) => addFiles(e.target.files)}
+            onChange={(e) => pickFile(e.target.files)}
           />
           <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-purple-100">
             <Plus size={28} className="text-purple-600" />
           </div>
-          <p className="text-xl font-bold text-slate-900">
-            Add File Progress
-          </p>
+          <p className="text-xl font-bold text-slate-900">Add File Progress</p>
           <p className="mt-2 text-sm text-slate-400">
-            Drag &amp; drop files here or click to browse
+            Drag &amp; drop file here or click to browse
           </p>
           <p className="mt-1 text-sm text-slate-400">
             PDF, DOCX, PPTX, XLSX, PNG, JPG (Max. 25MB)
           </p>
-          <p className="mt-3 text-xs text-slate-400">
-            Catatan: hanya nama file yang disimpan pada tahap frontend ini — file asli akan dipindahkan
-            ke penyimpanan backend saat sudah terhubung.
-          </p>
         </div>
-        {files.length > 0 && (
+        {file && (
           <ul className="mt-4 flex flex-col gap-1.5 text-sm text-slate-700">
-            {files.map((file, index) => (
-              <li key={`${file.name}-${index}`} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
-                <span className="truncate">{file.name}</span>
-                <button
-                  type="button"
-                  onClick={() => setFiles((prev) => prev.filter((_, i) => i !== index))}
-                  className="text-xs font-medium text-red-500 hover:text-red-600"
-                >
-                  Hapus
-                </button>
-              </li>
-            ))}
+            <li className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
+              <span className="truncate">{file.name}</span>
+              <button
+                type="button"
+                onClick={() => setFile(null)}
+                className="text-xs font-medium text-red-500 hover:text-red-600"
+              >
+                Hapus
+              </button>
+            </li>
           </ul>
         )}
       </div>

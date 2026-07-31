@@ -28,6 +28,17 @@ function parseAngkatan(value: unknown): number | null {
   return null;
 }
 
+/** Parse an optional string field — returns null (not required) if absent/blank. */
+function parseOptionalString(value: unknown): string | null {
+  return isNonEmptyString(value) ? value.trim() : null;
+}
+
+/** Parse an optional string array (e.g. mata kuliah checkboxes) — returns [] if absent/invalid. */
+function parseOptionalStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
 /**
  * Ensure every listed field is a non-empty string.
  * Returns the name of the first missing field, or null when all present.
@@ -91,6 +102,8 @@ export function validatePayload(payload: CreateUserPayload): ValidationResult {
         password,
         nip: (payload.nip as string).trim(),
         fakultas: (payload.fakultas as string).trim(),
+        jabatan: parseOptionalString(payload.jabatan),
+        mataKuliah: parseOptionalStringArray(payload.mata_kuliah),
       };
       return { ok: true, input };
     }
@@ -135,6 +148,7 @@ export function validatePayload(payload: CreateUserPayload): ValidationResult {
         sektor_usaha: (payload.sektor_usaha as string).trim(),
         alamat: (payload.alamat as string).trim(),
         deskripsi_usaha: (payload.deskripsi_usaha as string).trim(),
+        kontak: parseOptionalString(payload.kontak),
       };
       return { ok: true, input };
     }

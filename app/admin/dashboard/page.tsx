@@ -1,53 +1,271 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Users, UserRound, GraduationCap, Store, Clock3, ChevronRight } from "lucide-react";
 import { PageHeader, StatCard } from "@/components/shared";
 import { Card, CardHeader, CardTitle, Badge, ProgressBar } from "@/components/ui";
-import { useDosenSupervisedGroups } from "@/lib/useDosenSupervisedGroups";
-import { useDosenProgressReports } from "@/lib/useDosenProgressReports";
-import { useDosenFeedback } from "@/lib/useDosenFeedback";
-import { useAdminUsers } from "@/lib/useAdminUsers";
-import { MENTORING_MILESTONES, getCurrentStage, calculateGroupProgress } from "@/lib/dosenProgressReportsStorage";
-import {
-  getRecentActivities,
-  formatRelativeTime,
-  getAdminGroupStatus,
-  ADMIN_GROUP_STATUS_LABEL,
-  ADMIN_GROUP_STATUS_VARIANT,
-} from "@/lib/adminDashboardData";
+import { supabase } from "@/lib/supabaseClient";
+import { formatRelativeTime } from "@/lib/adminDashboardData";
+
+/** Raw shape of the `activity_log` + `profiles` (for nama_lengkap) join. */
+interface ActivityLogJoinRow {
+  id: string;
+  aktivitas: string;
+  created_at: string | null;
+  profiles: { nama_lengkap: string | null } | null;
+}
+
+interface RecentActivityRow {
+  id: string;
+  message: string;
+  createdAt: string;
+}
+
+function mapActivityLogRow(row: ActivityLogJoinRow): RecentActivityRow {
+  const namaLengkap = row.profiles?.nama_lengkap ?? "Pengguna";
+  return {
+    id: row.id,
+    message: `${namaLengkap} — ${row.aktivitas}`,
+    createdAt: row.created_at ?? new Date().toISOString(),
+  };
+}
+
+type KelompokStatus = "aktif" | "selesai";
+
+const KELOMPOK_STATUS_LABEL: Record<KelompokStatus, string> = {
+  aktif: "Aktif",
+  selesai: "Selesai",
+};
+
+const KELOMPOK_STATUS_VARIANT: Record<KelompokStatus, "green" | "gray"> = {
+  aktif: "green",
+  selesai: "gray",
+};
+
+/** Raw shape of the `kelompok -> project -> kelas/umkm` + latest `laporan_progress` join. */
+interface KelompokProgressJoinRow {
+  id: string;
+  nama_kelompok: string | null;
+  status: KelompokStatus | null;
+  project: {
+    kelas: { nama_kelas: string | null } | null;
+    umkm: { nama_usaha: string | null } | null;
+  } | null;
+  laporan_progress: { persentase_progress: number | null; created_at: string | null }[] | null;
+}
+
+interface ProgressTableRow {
+  id: string;
+  kelompokName: string;
+  kelasName: string;
+  umkmName: string;
+  progress: number;
+  status: KelompokStatus | null;
+}
+
+function mapProgressJoinRow(row: KelompokProgressJoinRow): ProgressTableRow {
+  const latestLaporan = row.laporan_progress?.[0];
+  return {
+    id: row.id,
+    kelompokName: row.nama_kelompok ?? "-",
+    kelasName: row.project?.kelas?.nama_kelas ?? "-",
+    umkmName: row.project?.umkm?.nama_usaha ?? "-",
+    progress: latestLaporan?.persentase_progress ?? 0,
+    status: row.status,
+  };
+}
+
+interface DashboardUserStats {
+  totalUsers: number;
+  totalDosen: number;
+  totalMahasiswa: number;
+  totalUmkm: number;
+}
+
+const EMPTY_STATS: DashboardUserStats = { totalUsers: 0, totalDosen: 0, totalMahasiswa: 0, totalUmkm: 0 };
+
+interface SystemSummaryStats {
+  kelasAktif: number;
+  projectAktif: number;
+  kelompokAktif: number;
+  laporanMasuk: number;
+}
+
+const EMPTY_SYSTEM_SUMMARY: SystemSummaryStats = {
+  kelasAktif: 0,
+  projectAktif: 0,
+  kelompokAktif: 0,
+  laporanMasuk: 0,
+};
 
 export default function AdminDashboardPage() {
-  const { groups, isHydrated: groupsHydrated } = useDosenSupervisedGroups();
-  const { reports, isHydrated: reportsHydrated } = useDosenProgressReports();
-  const { feedbacks, isHydrated: feedbackHydrated } = useDosenFeedback();
-  const { users: adminUsers, isHydrated: usersHydrated } = useAdminUsers();
-  const isHydrated = groupsHydrated && reportsHydrated && feedbackHydrated && usersHydrated;
+  const [stats, setStats] = useState<DashboardUserStats>(EMPTY_STATS);
+  const [statsHydrated, setStatsHydrated] = useState(false);
+  const [systemSummary, setSystemSummary] = useState<SystemSummaryStats>(EMPTY_SYSTEM_SUMMARY);
+  const [systemSummaryHydrated, setSystemSummaryHydrated] = useState(false);
+  const [progressRows, setProgressRows] = useState<ProgressTableRow[]>([]);
+  const [progressRowsHydrated, setProgressRowsHydrated] = useState(false);
+  const [recentActivities, setRecentActivities] = useState<RecentActivityRow[]>([]);
+  const [recentActivitiesHydrated, setRecentActivitiesHydrated] = useState(false);
+  const isHydrated =
+    statsHydrated && systemSummaryHydrated && progressRowsHydrated && recentActivitiesHydrated;
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadDashboardStats() {
+      try {
+        const [profilesResult, dosenResult, mahasiswaResult, umkmResult] = await Promise.all([
+          supabase.from("profiles").select("*", { count: "exact", head: true }),
+          supabase.from("dosen").select("*", { count: "exact", head: true }),
+          supabase.from("mahasiswa").select("*", { count: "exact", head: true }),
+          supabase.from("umkm").select("*", { count: "exact", head: true }),
+        ]);
+
+        const totalUsers = profilesResult.count ?? 0;
+        const totalDosen = dosenResult.count ?? 0;
+        const totalMahasiswa = mahasiswaResult.count ?? 0;
+        const totalUmkm = umkmResult.count ?? 0;
+
+        if (isMounted) setStats({ totalUsers, totalDosen, totalMahasiswa, totalUmkm });
+      } catch (error) {
+        console.error("Failed to load dashboard stats", error);
+        if (isMounted) setStats(EMPTY_STATS);
+      } finally {
+        if (isMounted) setStatsHydrated(true);
+      }
+    }
+
+    loadDashboardStats();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadSystemSummary() {
+      try {
+        const [kelasResult, projectResult, kelompokResult, laporanResult] = await Promise.all([
+          supabase.from("kelas").select("*", { count: "exact", head: true }),
+          supabase.from("project").select("*", { count: "exact", head: true }).eq("status", "berjalan"),
+          supabase.from("kelompok").select("*", { count: "exact", head: true }).eq("status", "aktif"),
+          supabase.from("laporan_progress").select("*", { count: "exact", head: true }),
+        ]);
+
+        const summary: SystemSummaryStats = {
+          kelasAktif: kelasResult.count ?? 0,
+          projectAktif: projectResult.count ?? 0,
+          kelompokAktif: kelompokResult.count ?? 0,
+          laporanMasuk: laporanResult.count ?? 0,
+        };
+
+        if (isMounted) setSystemSummary(summary);
+      } catch (error) {
+        console.error("Failed to load system summary", error);
+        if (isMounted) setSystemSummary(EMPTY_SYSTEM_SUMMARY);
+      } finally {
+        if (isMounted) setSystemSummaryHydrated(true);
+      }
+    }
+
+    loadSystemSummary();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadProgressTable() {
+      try {
+        const { data, error } = await supabase
+          .from("kelompok")
+          .select(
+            `
+              id,
+              nama_kelompok,
+              status,
+              project (
+                kelas ( nama_kelas ),
+                umkm ( nama_usaha )
+              ),
+              laporan_progress (
+                persentase_progress,
+                created_at
+              )
+            `
+          )
+          .order("created_at", { ascending: false, referencedTable: "laporan_progress" })
+          .limit(1, { foreignTable: "laporan_progress" })
+          .limit(3);
+
+        if (error) throw error;
+
+        const progressRows = ((data ?? []) as unknown as KelompokProgressJoinRow[]).map(mapProgressJoinRow);
+
+        if (isMounted) setProgressRows(progressRows);
+      } catch (error) {
+        console.error("Failed to load progress table", error);
+        if (isMounted) setProgressRows([]);
+      } finally {
+        if (isMounted) setProgressRowsHydrated(true);
+      }
+    }
+
+    loadProgressTable();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadRecentActivities() {
+      try {
+        const { data, error } = await supabase
+          .from("activity_log")
+          .select(
+            `
+              id,
+              aktivitas,
+              created_at,
+              profiles ( nama_lengkap )
+            `
+          )
+          .order("created_at", { ascending: false })
+          .limit(5);
+
+        if (error) throw error;
+
+        const recentActivities = ((data ?? []) as unknown as ActivityLogJoinRow[]).map(mapActivityLogRow);
+
+        if (isMounted) setRecentActivities(recentActivities);
+      } catch (error) {
+        console.error("Failed to load recent activities", error);
+        if (isMounted) setRecentActivities([]);
+      } finally {
+        if (isMounted) setRecentActivitiesHydrated(true);
+      }
+    }
+
+    loadRecentActivities();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   if (!isHydrated) {
     return null;
   }
-
-  // Same shared users store /admin/pengguna reads (lib/adminUsersData.ts) —
-  // Dashboard must never disagree with the Pengguna list on who's a dosen/mahasiswa.
-  const dosenAktif = adminUsers.filter((u) => u.role === "dosen" && u.isActive).length;
-  const mahasiswaAktif = adminUsers.filter((u) => u.role === "mahasiswa" && u.isActive).length;
-
-  // UMKM Mitra source of truth: the UMKM actually connected to a kelompok
-  // (lib/dosenGroupsStorage.ts, same as /dosen/project* and /dosen/mentoring-feedback*),
-  // not data/users.ts — that list only has 2 UMKM accounts seeded, while a 3rd
-  // group (Batik Jaya) is only represented via its group.umkmId relation.
-  const activeUmkmIds = new Set(groups.map((group) => group.umkmId).filter(Boolean));
-  const totalUmkmMitra = activeUmkmIds.size;
-
-  const totalPengguna = dosenAktif + mahasiswaAktif + totalUmkmMitra;
-
-  const kelasAktif = new Set(groups.map((group) => group.className)).size;
-  const projectAktif = MENTORING_MILESTONES.length;
-  const kelompokAktif = groups.filter((group) => group.status === "progress").length;
-  const laporanMasuk = reports.length;
-
-  const activities = getRecentActivities(groups, reports, feedbacks, 5);
 
   return (
     <div>
@@ -56,28 +274,28 @@ export default function AdminDashboardPage() {
       <div className="mb-6 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           label="Total Pengguna"
-          value={totalPengguna}
+          value={stats.totalUsers}
           icon={<Users size={22} strokeWidth={2} />}
           iconClassName="bg-purple/10 text-purple"
           accentClassName="bg-purple"
         />
         <StatCard
           label="Dosen"
-          value={dosenAktif}
+          value={stats.totalDosen}
           icon={<UserRound size={22} strokeWidth={2} />}
           iconClassName="bg-orange/10 text-orange"
           accentClassName="bg-orange"
         />
         <StatCard
           label="Mahasiswa"
-          value={mahasiswaAktif}
+          value={stats.totalMahasiswa}
           icon={<GraduationCap size={22} strokeWidth={2} />}
           iconClassName="bg-pink/10 text-pink"
           accentClassName="bg-pink"
         />
         <StatCard
           label="UMKM Mitra"
-          value={totalUmkmMitra}
+          value={stats.totalUmkm}
           icon={<Store size={22} strokeWidth={2} />}
           iconClassName="bg-green-100 text-green-700"
           accentClassName="bg-green-500"
@@ -89,11 +307,11 @@ export default function AdminDashboardPage() {
           <CardHeader>
             <CardTitle className="text-lg">Aktivitas Terbaru</CardTitle>
           </CardHeader>
-          {activities.length === 0 ? (
+          {recentActivities.length === 0 ? (
             <p className="py-6 text-center text-sm text-muted">Belum ada aktivitas.</p>
           ) : (
             <div className="flex flex-col divide-y divide-soft-gray-dark">
-              {activities.map((activity) => (
+              {recentActivities.map((activity) => (
                 <div key={activity.id} className="flex items-start gap-3 py-3.5 first:pt-0 last:pb-0">
                   <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-purple/10 text-purple">
                     <Clock3 size={16} strokeWidth={2} />
@@ -122,19 +340,19 @@ export default function AdminDashboardPage() {
           <div className="flex flex-col gap-4 text-sm">
             <div className="flex items-center justify-between">
               <span className="text-muted">Kelas Aktif</span>
-              <span className="font-semibold text-navy">{kelasAktif}</span>
+              <span className="font-semibold text-navy">{systemSummary.kelasAktif}</span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-muted">Project Aktif</span>
-              <span className="font-semibold text-navy">{projectAktif}</span>
+              <span className="font-semibold text-navy">{systemSummary.projectAktif}</span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-muted">Kelompok Aktif</span>
-              <span className="font-semibold text-navy">{kelompokAktif}</span>
+              <span className="font-semibold text-navy">{systemSummary.kelompokAktif}</span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-muted">Laporan Masuk</span>
-              <span className="font-semibold text-navy">{laporanMasuk}</span>
+              <span className="font-semibold text-navy">{systemSummary.laporanMasuk}</span>
             </div>
           </div>
         </Card>
@@ -157,28 +375,27 @@ export default function AdminDashboardPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-soft-gray-dark">
-              {groups.slice(0, 3).map((group) => {
-                const currentStage = getCurrentStage(group.id, MENTORING_MILESTONES, reports);
-                const progress = calculateGroupProgress(group.id, MENTORING_MILESTONES, reports);
-                const status = getAdminGroupStatus(group.id, MENTORING_MILESTONES, reports);
-                return (
-                  <tr key={group.id}>
-                    <td className="px-4 py-3 font-medium text-navy">{group.code}</td>
-                    <td className="px-4 py-3 text-muted">{group.className}</td>
-                    <td className="px-4 py-3 text-muted">{group.umkmName}</td>
-                    <td className="px-4 py-3 text-muted">{currentStage.title}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <ProgressBar value={progress} showLabel={false} className="w-24" />
-                        <span className="w-9 shrink-0 text-xs font-semibold text-navy">{progress}%</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <Badge variant={ADMIN_GROUP_STATUS_VARIANT[status]}>{ADMIN_GROUP_STATUS_LABEL[status]}</Badge>
-                    </td>
-                  </tr>
-                );
-              })}
+              {progressRows.map((row) => (
+                <tr key={row.id}>
+                  <td className="px-4 py-3 font-medium text-navy">{row.kelompokName}</td>
+                  <td className="px-4 py-3 text-muted">{row.kelasName}</td>
+                  <td className="px-4 py-3 text-muted">{row.umkmName}</td>
+                  <td className="px-4 py-3 text-muted">-</td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <ProgressBar value={row.progress} showLabel={false} className="w-24" />
+                      <span className="w-9 shrink-0 text-xs font-semibold text-navy">{row.progress}%</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    {row.status ? (
+                      <Badge variant={KELOMPOK_STATUS_VARIANT[row.status]}>{KELOMPOK_STATUS_LABEL[row.status]}</Badge>
+                    ) : (
+                      <Badge variant="gray">-</Badge>
+                    )}
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>

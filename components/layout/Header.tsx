@@ -2,25 +2,75 @@
 
 import { useEffect, useState } from "react";
 import type { User } from "@/types";
-import { getCurrentDemoUser } from "@/lib/demoSession";
+import { getCurrentProfile } from "@/lib/auth";
+import { supabase } from "@/lib/supabaseClient";
 
 interface HeaderProps {
   user: User;
 }
 
 export function Header({ user }: HeaderProps) {
-  // Starts from the same static per-role name RoleLayout already passes down
-  // (matches the default demo account exactly), then syncs to whichever demo
-  // account is actually active — server & first client render both use this
-  // same fallback, so it can't cause a hydration mismatch.
-  const [accountName, setAccountName] = useState(user.name);
+  // Starts empty (never the stale RoleLayout placeholder name) so the pill
+  // never flashes the wrong account before the real name loads — server &
+  // first client render both start null, so this can't cause a hydration
+  // mismatch either.
+  const [accountName, setAccountName] = useState<string | null>(null);
 
   useEffect(() => {
-    const activeUser = getCurrentDemoUser(user.role);
-    if (!activeUser) return;
-    const displayName = user.role === "umkm" ? (activeUser.businessName ?? activeUser.name) : activeUser.name;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time hydration-safe sync from the demo session (unavailable during SSR).
-    setAccountName(displayName);
+    let isMounted = true;
+
+    // Admin keeps its fixed "Admin" label (see accountLabel below) — no
+    // account name to fetch. Dosen/Mahasiswa/UMKM reflect the real
+    // authenticated Supabase user.
+    if (user.role === "dosen" || user.role === "mahasiswa") {
+      async function loadRealAccountName() {
+        try {
+          const profile = await getCurrentProfile();
+          const { data, error } = await supabase
+            .from("profiles")
+            .select("nama_lengkap")
+            .eq("id", profile.id)
+            .maybeSingle();
+          if (error) throw error;
+          if (isMounted && data?.nama_lengkap) {
+            setAccountName(data.nama_lengkap);
+          }
+        } catch (error) {
+          console.error("Failed to load authenticated account name", error);
+        }
+      }
+      loadRealAccountName();
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    if (user.role === "umkm") {
+      async function loadRealUmkmName() {
+        try {
+          const profile = await getCurrentProfile();
+          const { data, error } = await supabase
+            .from("umkm")
+            .select("nama_usaha")
+            .eq("profile_id", profile.id)
+            .maybeSingle();
+          if (error) throw error;
+          if (isMounted && data?.nama_usaha) {
+            setAccountName(data.nama_usaha);
+          }
+        } catch (error) {
+          console.error("Failed to load authenticated umkm name", error);
+        }
+      }
+      loadRealUmkmName();
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    return () => {
+      isMounted = false;
+    };
   }, [user.role]);
 
   // Admin's header pill shows the fixed role label "Admin" instead of the
@@ -34,7 +84,7 @@ export function Header({ user }: HeaderProps) {
         <p className="text-[15px] leading-tight text-white/90">Mata Kuliah Praktik Kewirausahaan</p>
       </div>
       <div className="translate-y-1 flex h-12 min-w-[120px] items-center justify-center rounded-2xl bg-white px-5 text-sm font-semibold text-navy shadow-sm">
-        {accountLabel}
+        {accountLabel ?? <span className="h-4 w-20 animate-pulse rounded bg-soft-gray-dark/60" aria-hidden="true" />}
       </div>
     </header>
   );

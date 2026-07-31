@@ -9,21 +9,6 @@ export type AuthProfile = {
   is_active: boolean | null;
 };
 
-type ProfileRelation = {
-  id: string;
-  email: string | null;
-};
-
-type DosenLoginRow = {
-  profile_id: string;
-  profiles: ProfileRelation | ProfileRelation[] | null;
-};
-
-type MahasiswaLoginRow = {
-  profile_id: string;
-  profiles: ProfileRelation | ProfileRelation[] | null;
-};
-
 export class AuthFlowError extends Error {
   constructor(message: string) {
     super(message);
@@ -31,64 +16,34 @@ export class AuthFlowError extends Error {
   }
 }
 
-function firstRelation<T>(relation: T | T[] | null): T | undefined {
-  return Array.isArray(relation) ? relation[0] : relation ?? undefined;
-}
-
 function normalizeIdentifier(value: string) {
   return value.trim();
 }
 
 async function getEmailByNip(nip: string): Promise<string> {
-  const { data, error } = await supabase
-    .from("dosen")
-    .select(`
-      profile_id,
-      profiles (
-        id,
-        email
-      )
-    `)
-    .eq("nip", normalizeIdentifier(nip))
-    .maybeSingle();
+  // A raw `.from("dosen").select(...)` can't work here — RLS only lets a
+  // dosen read their OWN row (auth.uid()), and this lookup runs before
+  // login, with no session yet. This SECURITY DEFINER RPC returns just the
+  // email for a matching NIP, nothing else, so anon can call it safely.
+  const { data, error } = await supabase.rpc("get_login_email_by_nip", { p_nip: normalizeIdentifier(nip) });
 
-  if (error) {
+  if (error || !data) {
     throw new AuthFlowError("NIP tidak ditemukan.");
   }
 
-  const profile = firstRelation((data as DosenLoginRow | null)?.profiles ?? null);
-
-  if (!profile?.email) {
-    throw new AuthFlowError("NIP tidak ditemukan.");
-  }
-
-  return profile.email;
+  return data as string;
 }
 
 async function getEmailByNim(nim: string): Promise<string> {
-  const { data, error } = await supabase
-    .from("mahasiswa")
-    .select(`
-      profile_id,
-      profiles (
-        id,
-        email
-      )
-    `)
-    .eq("nim", normalizeIdentifier(nim))
-    .maybeSingle();
+  // Same reasoning as getEmailByNip above — RLS only allows a mahasiswa to
+  // read their own row, but this lookup runs before login.
+  const { data, error } = await supabase.rpc("get_login_email_by_nim", { p_nim: normalizeIdentifier(nim) });
 
-  if (error) {
+  if (error || !data) {
     throw new AuthFlowError("NIM tidak ditemukan.");
   }
 
-  const profile = firstRelation((data as MahasiswaLoginRow | null)?.profiles ?? null);
-
-  if (!profile?.email) {
-    throw new AuthFlowError("NIM tidak ditemukan.");
-  }
-
-  return profile.email;
+  return data as string;
 }
 
 async function signInWithEmail(email: string, password: string, errorMessage: string) {

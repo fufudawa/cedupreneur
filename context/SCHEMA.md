@@ -1,8 +1,8 @@
 # SCHEMA.md — CEdPreneur
 
-> **Status: planning documentation only.** None of this is implemented. There is no database, no migrations, and no Supabase project wired up yet. This file exists so that when backend work eventually starts, there's a shared mental model of the intended data shape — it is not a spec to execute against today.
+> **Status: implemented.** This schema is live in the real Supabase project — every entity below exists as a real table with RLS policies scoped per role. This file is a rough mental map, not the source of truth: schemas drift (columns get added, e.g. `dosen.jabatan`/`mata_kuliah_diampu`, `umkm.kontak`, `project.file_url`/`status`, `laporan_progress.file_url`/`tanggal_submit`, `feedback.jenis_feedback`). **Before writing a migration or a query that depends on exact column names, confirm against the live database** (`list_tables`, `execute_sql`) rather than trusting this list verbatim.
 >
-> Do **not** write SQL, migrations, or any Supabase schema from this file unless a task explicitly asks for backend/database implementation work.
+> Some concepts from the original dummy/frontend build were deliberately **not** carried into the real schema — there is no milestone table, no revision-number column, no ketuntasan pass/fail column, and no student-roster-ahead-of-kelompok table. Pages that used to model those in dummy data now either derive the equivalent from real rows (e.g. a laporan's own `status`) or dropped the concept entirely — see `PRD.md`'s "Current implementation state" for the fuller list.
 
 ## Planned entities
 
@@ -20,7 +20,8 @@
 - **feedback** — mentoring feedback entries from either `dosen` or `umkm` directed at a `kelompok`.
 - **activity_log** — audit trail of significant actions across the platform (who did what, when).
 
-## Notes for future implementation
-- This list mirrors the shape already reflected in the current dummy fixtures under `data/` (`users`, `akademik`, `umkm`, `projects` → projects/groups/progress/feedback) — implementation should reconcile field names with those fixtures rather than inventing a parallel shape.
-- Role-based access (RLS-equivalent) will need to mirror the branch/role checks already implicit in the UI (e.g. a dosen only manages their own kelas' projects, a mahasiswa only sees their own kelompok).
+## Notes
+- Real RLS is in place and mirrors the role checks the UI expects (e.g. a dosen only manages their own kelas'/projects' rows, a mahasiswa only sees their own kelompok) — enforced at the database level, not just hidden in the frontend.
+- A few tables need `SECURITY DEFINER` RPCs instead of a plain RLS SELECT policy for cases where RLS alone can't work: pre-login NIP/NIM → email lookup (`get_login_email_by_nip`/`get_login_email_by_nim`, callable by `anon`) and atomic role changes (`admin_change_user_role`, admin-only, revoked from `anon`/`authenticated`).
+- Watch for a recursive-RLS trap on `INSERT ... RETURNING`: if a table's SELECT policy determines visibility via a function that itself queries that same table, an insert immediately followed by PostgREST's implicit `RETURNING` can fail with `42501` even though `WITH CHECK` passes. Fix is a non-recursive SELECT policy scoped by a direct foreign key instead of the recursive helper function. Hit this on both `kelompok` and `project` — check for it before assuming a similar table's insert-then-select-back pattern will "just work."
 - This schema is unrelated to, and must not be confused with, any other project's database schema.

@@ -51,6 +51,45 @@ function failureResponse(message: string, status: number): Response {
   return new Response(JSON.stringify(body), { status, headers: jsonHeaders });
 }
 
+/**
+ * Verifies the caller is a logged-in admin before allowing this function to
+ * proceed. `verify_jwt: true` on the function config only checks that the
+ * request carries SOME valid Supabase session — any dosen/mahasiswa/umkm
+ * could otherwise invoke this admin-only function directly. This checks the
+ * caller's own profile role using the anon-key client bound to their JWT.
+ */
+async function requireAdmin(
+  request: Request,
+  supabaseUrl: string,
+  anonKey: string,
+  adminClient: SupabaseClient
+): Promise<{ ok: true } | { ok: false; response: Response }> {
+  const authHeader = request.headers.get("Authorization");
+  if (!authHeader) {
+    return { ok: false, response: failureResponse("Unauthorized.", 401) };
+  }
+
+  const callerClient = createClient(supabaseUrl, anonKey, {
+    global: { headers: { Authorization: authHeader } },
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+  const { data: userData, error: userError } = await callerClient.auth.getUser();
+  if (userError || !userData.user) {
+    return { ok: false, response: failureResponse("Unauthorized.", 401) };
+  }
+
+  const { data: profile, error: profileError } = await adminClient
+    .from("profiles")
+    .select("role")
+    .eq("id", userData.user.id)
+    .maybeSingle();
+  if (profileError || profile?.role !== "admin") {
+    return { ok: false, response: failureResponse("Forbidden: hanya admin yang boleh mengakses fitur ini.", 403) };
+  }
+
+  return { ok: true };
+}
+
 // --- Role-table insertion ---
 //
 // Each helper inserts the role-specific record linked to the profile.
@@ -65,6 +104,8 @@ async function insertDosen(
     profile_id: profileId,
     nip: input.nip,
     fakultas: input.fakultas,
+    jabatan: input.jabatan,
+    mata_kuliah_diampu: input.mataKuliah,
   });
   if (error) throw new Error(error.message);
 }
@@ -94,6 +135,7 @@ async function insertUmkm(
     sektor_usaha: input.sektor_usaha,
     alamat: input.alamat,
     deskripsi_usaha: input.deskripsi_usaha,
+    kontak: input.kontak,
   });
   if (error) throw new Error(error.message);
 }
@@ -136,14 +178,18 @@ Deno.serve(async (request: Request): Promise<Response> => {
   // --- Environment / admin client ---
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
 
-  if (!supabaseUrl || !serviceRoleKey) {
+  if (!supabaseUrl || !serviceRoleKey || !anonKey) {
     return failureResponse("Server misconfiguration: missing Supabase credentials.", 500);
   }
 
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
+
+  const adminCheck = await requireAdmin(request, supabaseUrl, anonKey, supabase);
+  if (!adminCheck.ok) return adminCheck.response;
 
   // --- Step 1: parse + validate payload ---
   let rawPayload: unknown;

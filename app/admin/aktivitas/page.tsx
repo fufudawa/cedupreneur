@@ -2,12 +2,10 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Upload, MessageSquare, CheckCircle2, Users, Store, TrendingUp, Activity } from "lucide-react";
+import { Upload, MessageSquare, CheckCircle2, Users, Activity } from "lucide-react";
 import { PageHeader, StatCard } from "@/components/shared";
 import { Card, Badge, Button, Input, Select } from "@/components/ui";
-import { useDosenSupervisedGroups } from "@/lib/useDosenSupervisedGroups";
-import { useDosenProgressReports } from "@/lib/useDosenProgressReports";
-import { useDosenFeedback } from "@/lib/useDosenFeedback";
+import { useAdminMonitoring } from "@/lib/useAdminMonitoring";
 import {
   getAllActivities,
   formatActivityDateTime,
@@ -24,8 +22,6 @@ const ACTIVITY_TYPE_ICON: Record<ActivityType, typeof Upload> = {
   feedback_dosen: MessageSquare,
   feedback_umkm: CheckCircle2,
   create_group: Users,
-  create_umkm: Store,
-  progress_update: TrendingUp,
 };
 
 const TYPE_OPTIONS: { value: "all" | ActivityType; label: string }[] = [
@@ -34,13 +30,10 @@ const TYPE_OPTIONS: { value: "all" | ActivityType; label: string }[] = [
   { value: "feedback_dosen", label: "Feedback Dosen" },
   { value: "feedback_umkm", label: "Feedback UMKM" },
   { value: "create_group", label: "Kelompok Dibuat" },
-  { value: "create_umkm", label: "UMKM Ditambahkan" },
-  { value: "progress_update", label: "Progress Berubah" },
 ];
 
 const ROLE_OPTIONS: { value: "all" | ActivityActorRole; label: string }[] = [
   { value: "all", label: "Semua Role" },
-  { value: "admin", label: "Admin" },
   { value: "dosen", label: "Dosen" },
   { value: "mahasiswa", label: "Mahasiswa" },
   { value: "umkm", label: "UMKM" },
@@ -56,10 +49,7 @@ const TIME_OPTIONS = [
 const PAGE_SIZE = 10;
 
 export default function AdminAktivitasPage() {
-  const { groups, isHydrated: groupsHydrated } = useDosenSupervisedGroups();
-  const { reports, isHydrated: reportsHydrated } = useDosenProgressReports();
-  const { feedbacks, isHydrated: feedbackHydrated } = useDosenFeedback();
-  const isHydrated = groupsHydrated && reportsHydrated && feedbackHydrated;
+  const { groups, isHydrated } = useAdminMonitoring();
 
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<"all" | ActivityType>("all");
@@ -67,10 +57,7 @@ export default function AdminAktivitasPage() {
   const [timeFilter, setTimeFilter] = useState("all");
   const [page, setPage] = useState(1);
 
-  const activities = useMemo(
-    () => (isHydrated ? getAllActivities(groups, reports, feedbacks) : []),
-    [isHydrated, groups, reports, feedbacks]
-  );
+  const activities = useMemo(() => (isHydrated ? getAllActivities(groups) : []), [isHydrated, groups]);
 
   const totalAktivitas = activities.length;
   const totalUpload = activities.filter((a) => a.type === "upload_progress").length;
@@ -107,10 +94,7 @@ export default function AdminAktivitasPage() {
         description="Pantau seluruh aktivitas pengguna dan perubahan penting dalam sistem."
         actions={
           <Link href="/admin/dashboard">
-            <Button variant="outline">
-              <ArrowLeft size={16} strokeWidth={2} />
-              Kembali ke Dashboard
-            </Button>
+            <Button variant="outline">Kembali ke Dashboard</Button>
           </Link>
         }
       />
@@ -205,7 +189,6 @@ export default function AdminAktivitasPage() {
                       <p className="mt-0.5 text-xs text-muted">
                         {activity.actorRole.charAt(0).toUpperCase() + activity.actorRole.slice(1)}
                         {activity.groupName ? ` · ${activity.groupName}` : ""}
-                        {activity.projectStage ? ` · ${activity.projectStage}` : ""}
                       </p>
                       <p className="mt-0.5 text-xs text-muted">{formatActivityDateTime(activity.createdAt)}</p>
                     </div>

@@ -33,6 +33,9 @@ Login (/login/mahasiswa)
 ```
 
 ## Current implementation state
-- Frontend only. All screens render against **dummy/fixture data** in `data/` — no live database.
-- **Backend/Supabase is not integrated yet.** `lib/supabaseClient.ts` and `lib/auth.ts` are placeholders; login forms are UI-only (no real authentication).
+- **Backend is real and live: Supabase (Postgres + Auth + Storage + Edge Functions).** Every screen in the MVP scope above reads/writes the real database through Row Level Security (RLS) policies scoped per role — no dummy data drives any page anymore.
+- Login is real Supabase Auth per role: Admin/UMKM sign in by email, Dosen by NIP, Mahasiswa by NIM (NIP/NIM are resolved to a login email via two `SECURITY DEFINER` RPCs — `get_login_email_by_nip`/`get_login_email_by_nim` — since that lookup runs before a session exists and table RLS alone can't allow it pre-auth).
+- Admin-only mutations (create/update/delete/reset-password/change-role) go through Supabase Edge Functions (`supabase/functions/*`) that re-verify the caller is actually an admin server-side — `verify_jwt: true` alone does not do this.
+- `data/*.ts` (except `data/users.ts`) and most of the original `lib/*Storage.ts`/`useDosen*`/`useUmkm*` dummy hooks from the pre-migration build are now dead code, superseded by real `lib/use*.ts` Supabase-backed hooks (`useAdminUsers`, `useAdminMonitoring`, `useAdminMasterData`, `useDosenKelompokBimbingan`, `useMahasiswaKelompok`, `useUmkmKelompok`, etc.). `data/users.ts`'s `CURRENT_USER` is the one deliberate exception — `lib/auth.ts#getCurrentUser` still uses it as an SSR-safe placeholder for `RoleLayout`'s initial render, before the real account name loads client-side.
+- Concepts referenced in earlier/dummy-era docs but that don't exist in the real schema (milestones, revision numbers, ketuntasan pass/fail badges, per-user "kelas roster" pre-assignment) have been intentionally dropped in favor of what the real tables actually model — see `SCHEMA.md`.
 - High-fidelity visual design is being brought in screen-by-screen from Figma (see `DESIGN.md`), replacing earlier rough/manual layouts.

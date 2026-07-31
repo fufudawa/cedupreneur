@@ -5,17 +5,15 @@ import Link from "next/link";
 import { ArrowLeft, Users, Layers, ClipboardCheck, TrendingUp } from "lucide-react";
 import { PageHeader, StatCard } from "@/components/shared";
 import { Card, Badge, Button, Input, Select, ProgressBar, FilterToolbar } from "@/components/ui";
-import { useDosenSupervisedGroups } from "@/lib/useDosenSupervisedGroups";
-import { useDosenProgressReports } from "@/lib/useDosenProgressReports";
-import { MENTORING_MILESTONES, getCurrentStage, calculateGroupProgress } from "@/lib/dosenProgressReportsStorage";
-import {
-  getAdminGroupStatus,
-  ADMIN_GROUP_STATUS_LABEL,
-  ADMIN_GROUP_STATUS_VARIANT,
-  type AdminGroupStatus,
-} from "@/lib/adminDashboardData";
+import { useDosenKelompokBimbingan, type KelompokMentoringStatus } from "@/lib/useDosenKelompokBimbingan";
+import { ADMIN_GROUP_STATUS_LABEL, ADMIN_GROUP_STATUS_VARIANT } from "@/lib/adminDashboardData";
 
-const STATUS_OPTIONS: { value: "all" | AdminGroupStatus; label: string }[] = [
+// Tidak ada tabel milestone/tahap di database — dropdown dipertahankan (layout
+// tidak berubah) tapi hanya berisi satu opsi inert, karena "tahap" bukan
+// konsep yang bisa difilter dari data nyata saat ini.
+const STAGE_OPTIONS = [{ value: "all", label: "Semua Tahap" }];
+
+const STATUS_OPTIONS: { value: "all" | KelompokMentoringStatus; label: string }[] = [
   { value: "all", label: "Semua Status" },
   { value: "waiting", label: "Menunggu Feedback" },
   { value: "incomplete", label: "Belum Tuntas" },
@@ -24,14 +22,11 @@ const STATUS_OPTIONS: { value: "all" | AdminGroupStatus; label: string }[] = [
 ];
 
 export default function SeluruhKelompokPage() {
-  const { groups, isHydrated: groupsHydrated } = useDosenSupervisedGroups();
-  const { reports, isHydrated: reportsHydrated } = useDosenProgressReports();
-  const isHydrated = groupsHydrated && reportsHydrated;
+  const { groups, isHydrated } = useDosenKelompokBimbingan();
 
   const [search, setSearch] = useState("");
   const [studyProgramFilter, setStudyProgramFilter] = useState("all");
-  const [stageFilter, setStageFilter] = useState("all");
-  const [statusFilter, setStatusFilter] = useState<"all" | AdminGroupStatus>("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | KelompokMentoringStatus>("all");
 
   const studyProgramOptions = useMemo(
     () => [
@@ -44,30 +39,14 @@ export default function SeluruhKelompokPage() {
     [groups]
   );
 
-  const stageOptions = [
-    { value: "all", label: "Semua" },
-    ...MENTORING_MILESTONES.map((milestone) => ({ value: milestone.title, label: milestone.title })),
-  ];
-
-  const rows = useMemo(
-    () =>
-      groups.map((group) => ({
-        group,
-        currentStage: getCurrentStage(group.id, MENTORING_MILESTONES, reports),
-        progress: calculateGroupProgress(group.id, MENTORING_MILESTONES, reports),
-        status: getAdminGroupStatus(group.id, MENTORING_MILESTONES, reports),
-      })),
-    [groups, reports]
-  );
-
   const totalKelompok = groups.length;
-  const sedangBerjalan = groups.filter((g) => g.status === "progress").length;
+  const sedangBerjalan = groups.filter((g) => g.status === "aktif").length;
   const averageProgress =
-    rows.length === 0 ? 0 : Math.round(rows.reduce((total, row) => total + row.progress, 0) / rows.length);
+    groups.length === 0 ? 0 : Math.round(groups.reduce((total, g) => total + g.progress, 0) / groups.length);
 
   const filtered = useMemo(
     () =>
-      rows.filter(({ group, currentStage, status }) => {
+      groups.filter((group) => {
         const keyword = search.toLowerCase();
         const matchSearch =
           keyword === "" ||
@@ -76,11 +55,10 @@ export default function SeluruhKelompokPage() {
           group.studyProgram.toLowerCase().includes(keyword) ||
           group.umkmName.toLowerCase().includes(keyword);
         const matchStudyProgram = studyProgramFilter === "all" || group.studyProgram === studyProgramFilter;
-        const matchStage = stageFilter === "all" || currentStage.title === stageFilter;
-        const matchStatus = statusFilter === "all" || status === statusFilter;
-        return matchSearch && matchStudyProgram && matchStage && matchStatus;
+        const matchStatus = statusFilter === "all" || group.mentoringStatus === statusFilter;
+        return matchSearch && matchStudyProgram && matchStatus;
       }),
-    [rows, search, studyProgramFilter, stageFilter, statusFilter]
+    [groups, search, studyProgramFilter, statusFilter]
   );
 
   return (
@@ -136,29 +114,33 @@ export default function SeluruhKelompokPage() {
         />
         <Select
           id="filter-tahap"
-          options={stageOptions}
-          value={stageFilter}
-          onChange={(e) => setStageFilter(e.target.value)}
+          options={STAGE_OPTIONS}
+          value="all"
+          disabled
           className="w-full sm:w-[190px]"
         />
         <Select
           id="filter-status"
           options={STATUS_OPTIONS}
           value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value as "all" | AdminGroupStatus)}
+          onChange={(e) => setStatusFilter(e.target.value as "all" | KelompokMentoringStatus)}
           className="w-full sm:w-[180px]"
         />
       </FilterToolbar>
 
       <Card className="min-w-0 rounded-2xl p-5">
-        {!isHydrated ? null : filtered.length === 0 ? (
+        {!isHydrated ? null : groups.length === 0 ? (
+          <div className="py-10 text-center">
+            <p className="text-sm font-semibold text-navy">Belum ada kelompok bimbingan.</p>
+          </div>
+        ) : filtered.length === 0 ? (
           <div className="py-10 text-center">
             <p className="text-sm font-semibold text-navy">Kelompok tidak ditemukan</p>
             <p className="mt-1 text-sm text-muted">Coba ubah kata pencarian atau filter yang digunakan.</p>
           </div>
         ) : (
           <div className="flex flex-col divide-y divide-soft-gray-dark">
-            {filtered.map(({ group, currentStage, progress, status }) => (
+            {filtered.map((group) => (
               <div
                 key={group.id}
                 className="grid grid-cols-1 items-center gap-4 py-4 first:pt-0 last:pb-0 lg:grid-cols-[minmax(0,1fr)_minmax(320px,420px)_auto]"
@@ -180,13 +162,17 @@ export default function SeluruhKelompokPage() {
                 <div className="min-w-0">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs text-muted">
-                      Tahap: <span className="font-medium text-navy">{currentStage.title}</span>
+                      Tahap: <span className="font-medium text-navy">-</span>
                     </span>
-                    <Badge variant={ADMIN_GROUP_STATUS_VARIANT[status]}>{ADMIN_GROUP_STATUS_LABEL[status]}</Badge>
+                    <Badge variant={ADMIN_GROUP_STATUS_VARIANT[group.mentoringStatus]}>
+                      {ADMIN_GROUP_STATUS_LABEL[group.mentoringStatus]}
+                    </Badge>
                   </div>
                   <div className="mt-1.5 flex items-center gap-3">
-                    <ProgressBar value={progress} showLabel={false} className="flex-1" />
-                    <span className="w-10 shrink-0 text-right text-sm font-semibold text-navy">{progress}%</span>
+                    <ProgressBar value={group.progress} showLabel={false} className="flex-1" />
+                    <span className="w-10 shrink-0 text-right text-sm font-semibold text-navy">
+                      {group.progress}%
+                    </span>
                   </div>
                 </div>
 

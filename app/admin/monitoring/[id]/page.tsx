@@ -7,36 +7,32 @@ import { ArrowLeft } from "lucide-react";
 import { PageHeader, ValidasiBadge } from "@/components/shared";
 import { Card, CardHeader, CardTitle, Badge, Button, ProgressBar } from "@/components/ui";
 import { cn } from "@/lib/utils";
-import { useDosenSupervisedGroups } from "@/lib/useDosenSupervisedGroups";
-import { useDosenProgressReports } from "@/lib/useDosenProgressReports";
-import { useDosenFeedback } from "@/lib/useDosenFeedback";
-import {
-  MENTORING_MILESTONES,
-  getCurrentStage,
-  calculateGroupProgress,
-  getMilestoneReport,
-  REPORT_STATUS_LABEL,
-  REPORT_STATUS_BADGE_VARIANT,
-} from "@/lib/dosenProgressReportsStorage";
-import {
-  getAllActivities,
-  formatActivityDateTime,
-  ACTIVITY_TYPE_LABEL,
-  getUmkmFeedbackForGroup,
-} from "@/lib/adminDashboardData";
-import { getLatestUmkmFeedbackByReport } from "@/lib/umkmFeedbackStorage";
+import { useAdminMonitoring } from "@/lib/useAdminMonitoring";
+import { getAllActivities, formatActivityDateTime, ACTIVITY_TYPE_LABEL } from "@/lib/adminDashboardData";
 
 type FeedbackTab = "all" | "dosen" | "umkm";
+
+const LAPORAN_STATUS_LABEL: Record<string, string> = {
+  draft: "Draft",
+  submitted: "Menunggu Feedback",
+  reviewed: "Selesai Direview",
+};
+
+const LAPORAN_STATUS_VARIANT: Record<string, "gray" | "orange" | "green"> = {
+  draft: "gray",
+  submitted: "orange",
+  reviewed: "green",
+};
 
 interface CombinedFeedbackItem {
   id: string;
   source: "dosen" | "umkm";
   giverName: string;
   roleLabel: string;
-  tahap: string;
+  laporanTitle: string;
   content: string;
   statusLabel: string;
-  statusVariant: "green" | "pink" | "orange";
+  statusVariant: "green" | "orange";
   createdAt: string;
 }
 
@@ -52,10 +48,7 @@ function formatDateTime(iso: string) {
 
 export default function AdminMonitoringDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const { groups, isHydrated: groupsHydrated } = useDosenSupervisedGroups();
-  const { reports, isHydrated: reportsHydrated } = useDosenProgressReports();
-  const { feedbacks, isHydrated: feedbackHydrated } = useDosenFeedback();
-  const isHydrated = groupsHydrated && reportsHydrated && feedbackHydrated;
+  const { groups, isHydrated } = useAdminMonitoring();
 
   const [feedbackTab, setFeedbackTab] = useState<FeedbackTab>("all");
 
@@ -68,39 +61,41 @@ export default function AdminMonitoringDetailPage({ params }: { params: Promise<
     notFound();
   }
 
-  const currentStage = getCurrentStage(group.id, MENTORING_MILESTONES, reports);
-  const progress = calculateGroupProgress(group.id, MENTORING_MILESTONES, reports);
-  const groupReports = reports.filter((r) => r.groupId === group.id);
-  const groupFeedbacks = feedbacks.filter((f) => f.groupId === group.id);
-  const groupActivities = getAllActivities(groups, reports, feedbacks)
+  const groupActivities = getAllActivities(groups)
     .filter((activity) => activity.groupId === group.id)
     .slice(0, 8);
 
-  const dosenFeedbackItems: CombinedFeedbackItem[] = [...groupFeedbacks]
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    .map((feedback) => ({
-      id: feedback.id,
-      source: "dosen",
-      giverName: feedback.giverName,
-      roleLabel: "Dosen",
-      tahap: reports.find((r) => r.id === feedback.reportId)?.milestoneTitle ?? "-",
-      content: feedback.content,
-      statusLabel: feedback.completionStatus === "complete" ? "Tuntas" : "Belum Tuntas",
-      statusVariant: feedback.completionStatus === "complete" ? "green" : "pink",
-      createdAt: feedback.createdAt,
-    }));
+  const dosenFeedbackItems: CombinedFeedbackItem[] = group.laporan.flatMap((laporan) =>
+    laporan.feedback
+      .filter((f) => f.pemberiRole === "dosen")
+      .map((feedback) => ({
+        id: feedback.id,
+        source: "dosen" as const,
+        giverName: group.dosenName,
+        roleLabel: "Dosen",
+        laporanTitle: laporan.judulLaporan,
+        content: feedback.isiFeedback,
+        statusLabel: feedback.jenisFeedback === "catatan_dosen" ? "Catatan" : (feedback.jenisFeedback ?? "Catatan"),
+        statusVariant: "green" as const,
+        createdAt: feedback.createdAt ?? "",
+      }))
+  );
 
-  const umkmFeedbackItems: CombinedFeedbackItem[] = getUmkmFeedbackForGroup(group.id).map((feedback) => ({
-    id: feedback.id,
-    source: "umkm",
-    giverName: feedback.pemberiNama,
-    roleLabel: "UMKM Mitra",
-    tahap: feedback.laporanTitle,
-    content: feedback.isiFeedback,
-    statusLabel: feedback.statusValidasi === "tuntas" ? "Sesuai" : "Perlu Penyesuaian",
-    statusVariant: feedback.statusValidasi === "tuntas" ? "green" : "orange",
-    createdAt: feedback.createdAt,
-  }));
+  const umkmFeedbackItems: CombinedFeedbackItem[] = group.laporan.flatMap((laporan) =>
+    laporan.feedback
+      .filter((f) => f.pemberiRole === "umkm")
+      .map((feedback) => ({
+        id: feedback.id,
+        source: "umkm" as const,
+        giverName: group.umkmName,
+        roleLabel: "UMKM Mitra",
+        laporanTitle: laporan.judulLaporan,
+        content: feedback.isiFeedback,
+        statusLabel: feedback.jenisFeedback === "sesuai" ? "Sesuai" : "Perlu Penyesuaian",
+        statusVariant: feedback.jenisFeedback === "sesuai" ? ("green" as const) : ("orange" as const),
+        createdAt: feedback.createdAt ?? "",
+      }))
+  );
 
   const combinedFeedbackItems = [...dosenFeedbackItems, ...umkmFeedbackItems].sort((a, b) =>
     b.createdAt.localeCompare(a.createdAt)
@@ -143,7 +138,7 @@ export default function AdminMonitoringDetailPage({ params }: { params: Promise<
           </div>
           <div>
             <p className="text-xs text-muted">Dosen Pembimbing</p>
-            <p className="mt-1 text-sm font-semibold text-navy">{group.lecturerName}</p>
+            <p className="mt-1 text-sm font-semibold text-navy">{group.dosenName}</p>
           </div>
           <div>
             <p className="text-xs text-muted">UMKM Mitra</p>
@@ -165,12 +160,9 @@ export default function AdminMonitoringDetailPage({ params }: { params: Promise<
         <div className="my-6 h-px bg-soft-gray-dark" />
 
         <div className="flex items-center gap-4">
-          <ProgressBar value={progress} showLabel={false} className="flex-1" />
-          <span className="shrink-0 text-lg font-bold text-navy">{progress}%</span>
+          <ProgressBar value={group.progress} showLabel={false} className="flex-1" />
+          <span className="shrink-0 text-lg font-bold text-navy">{group.progress}%</span>
         </div>
-        <p className="mt-2 text-sm text-muted">
-          Tahap saat ini: <span className="font-medium text-navy">{currentStage.title}</span>
-        </p>
 
         <div className="my-6 h-px bg-soft-gray-dark" />
 
@@ -184,54 +176,32 @@ export default function AdminMonitoringDetailPage({ params }: { params: Promise<
 
       <Card className="mb-6 min-w-0 rounded-2xl p-6">
         <CardHeader>
-          <CardTitle className="text-lg">Timeline Project</CardTitle>
-        </CardHeader>
-        <div className="flex flex-col">
-          {MENTORING_MILESTONES.map((milestone) => {
-            const report = getMilestoneReport(group.id, milestone.id, reports);
-            const status = report?.status ?? "not_submitted";
-            return (
-              <div
-                key={milestone.id}
-                className="flex flex-col gap-2 border-b border-soft-gray-dark py-4 last:border-b-0 sm:flex-row sm:items-start sm:justify-between"
-              >
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-navy">{milestone.title}</p>
-                  {report && <p className="mt-0.5 text-xs text-muted">{report.fileName}</p>}
-                </div>
-                <Badge variant={REPORT_STATUS_BADGE_VARIANT[status]}>{REPORT_STATUS_LABEL[status]}</Badge>
-              </div>
-            );
-          })}
-        </div>
-      </Card>
-
-      <Card className="mb-6 min-w-0 rounded-2xl p-6">
-        <CardHeader>
           <CardTitle className="text-lg">Daftar Laporan</CardTitle>
         </CardHeader>
-        {groupReports.length === 0 ? (
+        {group.laporan.length === 0 ? (
           <p className="text-sm text-muted">Belum ada laporan untuk kelompok ini.</p>
         ) : (
           <div className="flex flex-col">
-            {groupReports.map((report) => {
-              const latestUmkmFeedback = getLatestUmkmFeedbackByReport(report.id);
+            {group.laporan.map((laporan) => {
+              const latestUmkmFeedback = laporan.feedback.find((f) => f.pemberiRole === "umkm");
               return (
                 <div
-                  key={report.id}
+                  key={laporan.id}
                   className="flex flex-col gap-2 border-b border-soft-gray-dark py-4 last:border-b-0 sm:flex-row sm:items-start sm:justify-between"
                 >
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-navy">{report.milestoneTitle}</p>
+                    <p className="text-sm font-medium text-navy">{laporan.judulLaporan}</p>
                     <p className="mt-0.5 text-xs text-muted">
-                      {report.fileName} &middot; {formatDateTime(report.submittedAt)}
+                      {formatDateTime(laporan.tanggalSubmit ?? laporan.createdAt ?? "")}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
-                    <Badge variant={REPORT_STATUS_BADGE_VARIANT[report.status]}>
-                      {REPORT_STATUS_LABEL[report.status]}
+                    <Badge variant={LAPORAN_STATUS_VARIANT[laporan.status ?? "draft"]}>
+                      {LAPORAN_STATUS_LABEL[laporan.status ?? "draft"]}
                     </Badge>
-                    {latestUmkmFeedback && <ValidasiBadge status={latestUmkmFeedback.statusValidasi} />}
+                    {latestUmkmFeedback && (
+                      <ValidasiBadge status={latestUmkmFeedback.jenisFeedback === "sesuai" ? "tuntas" : "belum_tuntas"} />
+                    )}
                   </div>
                 </div>
               );
@@ -285,7 +255,7 @@ export default function AdminMonitoringDetailPage({ params }: { params: Promise<
                   <Badge variant={item.statusVariant}>{item.statusLabel}</Badge>
                 </div>
                 <p className="mt-1 text-xs text-muted">
-                  {item.tahap} &middot; {formatDateTime(item.createdAt)}
+                  {item.laporanTitle} &middot; {formatDateTime(item.createdAt)}
                 </p>
                 <p className="mt-1 text-sm text-navy">{item.content}</p>
               </div>

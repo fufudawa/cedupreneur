@@ -1,23 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Trash2, Users as UsersIcon } from "lucide-react";
 import { PageHeader, StudentPickerModal, Modal } from "@/components/shared";
 import { Card, Input, Select, Textarea, Button } from "@/components/ui";
-import { PROJECT_STAGE_TITLES } from "@/data/dosenProject";
-import { lecturerDashboard } from "@/data/dosenDashboard";
-import { useDosenSupervisedGroups } from "@/lib/useDosenSupervisedGroups";
+import { supabase } from "@/lib/supabaseClient";
+import { getCurrentProfile } from "@/lib/auth";
 import {
-  STUDY_PROGRAMS,
-  CLASSES_BY_STUDY_PROGRAM,
-  UMKM_OPTIONS,
-  STUDENTS,
-  createGroupId,
-  buildGroupCode,
-  type SupervisedGroup,
-  type SupervisedGroupMember,
-} from "@/lib/dosenGroupsStorage";
+  useDosenKelompokBimbingan,
+  type KelompokBimbingan,
+  type KelompokBimbinganMember,
+} from "@/lib/useDosenKelompokBimbingan";
+import type { StudentOption } from "@/lib/dosenGroupsStorage";
 
 const NAME_MIN_LENGTH = 3;
 const NAME_MAX_LENGTH = 80;
@@ -26,27 +21,43 @@ const MIN_MEMBERS = 2;
 const MAX_MEMBERS = 5;
 const PAGE_SIZE = 3;
 
-const studyProgramOptions = [
-  { value: "", label: "Pilih program studi" },
-  ...STUDY_PROGRAMS.map((program) => ({ value: program, label: program })),
-];
+interface SelectOption {
+  value: string;
+  label: string;
+}
 
 export default function TambahKelompokPage() {
   const router = useRouter();
-  const { groups, isHydrated, addGroup, updateGroup, removeGroup } = useDosenSupervisedGroups();
+  const { groups, isHydrated, refetch } = useDosenKelompokBimbingan();
+
+  // Data pendukung form (prodi + nama mahasiswa nyata, daftar kelas nyata,
+  // daftar UMKM nyata) — diambil sekali dari Supabase, menggantikan
+  // STUDENTS/STUDY_PROGRAMS/CLASSES_BY_STUDY_PROGRAM/UMKM_OPTIONS dummy.
+  const [studentOptions, setStudentOptions] = useState<StudentOption[]>([]);
+  const [studyProgramOptions, setStudyProgramOptions] = useState<SelectOption[]>([]);
+  const [projectOptions, setProjectOptions] = useState<SelectOption[]>([]);
+  // Kelas & UMKM Mitra bukan lagi dropdown manual — keduanya diturunkan
+  // otomatis dari project yang dipilih (project.kelas_id / project.umkm_id),
+  // supaya nilai yang tampil di form selalu konsisten dengan data yang benar-
+  // benar tersimpan (kelompok sendiri tidak punya kolom kelas/umkm).
+  const [projectDetails, setProjectDetails] = useState<Record<string, { className: string; umkmName: string }>>({});
+  const [supportDataHydrated, setSupportDataHydrated] = useState(false);
 
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingGroupSnapshot, setEditingGroupSnapshot] = useState<KelompokBimbingan | null>(null);
+  const [projectId, setProjectId] = useState("");
   const [name, setName] = useState("");
   const [studyProgram, setStudyProgram] = useState("");
-  const [className, setClassName] = useState("");
-  const [umkmId, setUmkmId] = useState("");
-  const [members, setMembers] = useState<SupervisedGroupMember[]>([]);
+  const [members, setMembers] = useState<KelompokBimbinganMember[]>([]);
   const [note, setNote] = useState("");
   const [touched, setTouched] = useState(false);
   const [isPickerOpen, setIsPickerOpen] = useState(false);
-  const [deletingGroup, setDeletingGroup] = useState<SupervisedGroup | null>(null);
+  const [deletingGroup, setDeletingGroup] = useState<KelompokBimbingan | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     if (!toast) return;
@@ -54,19 +65,124 @@ export default function TambahKelompokPage() {
     return () => clearTimeout(timer);
   }, [toast]);
 
-  const classOptions = useMemo(() => {
-    const classes = studyProgram ? (CLASSES_BY_STUDY_PROGRAM[studyProgram] ?? []) : [];
-    return [{ value: "", label: "Pilih kelas" }, ...classes.map((c) => ({ value: c, label: c }))];
-  }, [studyProgram]);
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadSupportData() {
+      // Identitas dosen yang login — dipakai untuk scope kelas & UMKM ke milik
+      // dosen ini, bukan menarik seluruh kelas/UMKM di database.
+      let dosenId: string | null = null;
+      try {
+        const profile = await getCurrentProfile();
+        const { data: dosenRow, error: dosenError } = await supabase
+          .from("dosen")
+          .select("id")
+          .eq("profile_id", profile.id)
+          .maybeSingle();
+        if (dosenError) throw dosenError;
+        dosenId = (dosenRow?.id as string | undefined) ?? null;
+      } catch (error) {
+        console.error("Failed to resolve dosen identity for kelompok form", error);
+      }
+
+      // Setiap query dijalankan & ditangani independen (bukan satu Promise.all
+      // bersama) supaya SATU tabel yang gagal (mis. diblokir RLS) tidak ikut
+      // mengosongkan dropdown lain yang sebenarnya berhasil.
+
+      try {
+        type MahasiswaRow = {
+          id: string;
+          nim: string | null;
+          prodi: string | null;
+          profiles: { nama_lengkap: string | null } | null;
+        };
+        const { data, error } = await supabase
+          .from("mahasiswa")
+          .select("id, nim, prodi, profiles ( nama_lengkap )");
+        if (error) throw error;
+
+        const mahasiswaRows = (data ?? []) as unknown as MahasiswaRow[];
+        const students: StudentOption[] = mahasiswaRows.map((row) => ({
+          id: row.id,
+          nim: row.nim ?? "-",
+          name: row.profiles?.nama_lengkap ?? "-",
+          studyProgram: row.prodi ?? "",
+          // Tidak ada tabel kelas_mahasiswa di skema — mahasiswa tidak terhubung
+          // ke satu kelas tertentu, jadi field ini dikosongkan (lihat catatan
+          // filter kelas di bawah availableStudentsForPicker).
+          className: "",
+        }));
+
+        const uniqueProdi = Array.from(new Set(students.map((s) => s.studyProgram).filter(Boolean)));
+        if (isMounted) {
+          setStudentOptions(students);
+          setStudyProgramOptions([
+            { value: "", label: "Pilih program studi" },
+            ...uniqueProdi.map((p) => ({ value: p, label: p })),
+          ]);
+        }
+      } catch (error) {
+        console.error("Failed to load mahasiswa for kelompok form (cek RLS SELECT pada tabel mahasiswa):", error);
+        if (isMounted) {
+          setStudentOptions([]);
+          setStudyProgramOptions([{ value: "", label: "Pilih program studi" }]);
+        }
+      }
+
+      try {
+        // Kelas & UMKM Mitra tidak lagi dipilih manual — keduanya diambil
+        // langsung dari relasi project.kelas / project.umkm supaya nilai yang
+        // ditampilkan selalu akurat sesuai project yang dipilih di form.
+        type ProjectRow = {
+          id: string;
+          judul_project: string | null;
+          kelas: { nama_kelas: string | null } | null;
+          umkm: { nama_usaha: string | null } | null;
+        };
+        let query = supabase
+          .from("project")
+          .select("id, judul_project, kelas ( nama_kelas ), umkm ( nama_usaha )")
+          .order("created_at", { ascending: false });
+        if (dosenId) query = query.eq("created_by", dosenId);
+        const { data, error } = await query;
+        if (error) throw error;
+
+        const projectRows = (data ?? []) as unknown as ProjectRow[];
+        if (isMounted) {
+          setProjectOptions(projectRows.map((p) => ({ value: p.id, label: p.judul_project ?? "(Tanpa judul)" })));
+          setProjectDetails(
+            Object.fromEntries(
+              projectRows.map((p) => [
+                p.id,
+                { className: p.kelas?.nama_kelas ?? "-", umkmName: p.umkm?.nama_usaha ?? "-" },
+              ])
+            )
+          );
+          if (projectRows.length > 0) {
+            setProjectId((current) => (current === "" ? projectRows[0].id : current));
+          }
+        }
+      } catch (error) {
+        console.error("Failed to load project for kelompok form (cek RLS SELECT pada tabel project):", error);
+        if (isMounted) {
+          setProjectOptions([]);
+          setProjectDetails({});
+        }
+      }
+
+      if (isMounted) setSupportDataHydrated(true);
+    }
+
+    loadSupportData();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const activeGroupsExcludingEditing = useMemo(
-    () => groups.filter((group) => group.status === "progress" && group.id !== editingId),
+    () => groups.filter((group) => group.status === "aktif" && group.id !== editingId),
     [groups, editingId]
-  );
-
-  const takenUmkmIds = useMemo(
-    () => new Set(activeGroupsExcludingEditing.map((group) => group.umkmId)),
-    [activeGroupsExcludingEditing]
   );
 
   const takenStudentIds = useMemo(
@@ -74,38 +190,37 @@ export default function TambahKelompokPage() {
     [activeGroupsExcludingEditing]
   );
 
-  const umkmOptionsWithAvailability = [
-    { value: "", label: "Pilih UMKM mitra" },
-    ...UMKM_OPTIONS.map((umkm) => ({
-      value: umkm.id,
-      label: takenUmkmIds.has(umkm.id) ? `${umkm.name} (Sudah digunakan)` : umkm.name,
-      disabled: takenUmkmIds.has(umkm.id),
-    })),
-  ];
-
-  const availableStudentsForPicker = STUDENTS.filter(
-    (student) =>
-      student.studyProgram === studyProgram &&
-      student.className === className &&
-      !members.some((m) => m.id === student.id)
+  // Tidak ada tabel kelas_mahasiswa nyata untuk menghubungkan mahasiswa ke
+  // satu kelas tertentu, jadi pemilihan "Kelas" tidak dipakai untuk memfilter
+  // (mengikuti pola dropdown inert yang sama seperti "Tahap" di halaman lain)
+  // — hanya program studi (kolom nyata mahasiswa.prodi) yang benar-benar memfilter.
+  const availableStudentsForPicker = studentOptions.filter(
+    (student) => student.studyProgram === studyProgram && !members.some((m) => m.id === student.id)
   );
 
-  const canOpenPicker = studyProgram !== "" && className !== "" && members.length < MAX_MEMBERS;
+  // Saat edit, tampilkan kelas/umkm persis seperti yang tercatat untuk
+  // kelompok itu (dari hook); saat buat baru, turunkan dari project yang
+  // dipilih di dropdown "Pilih Project".
+  const derivedProjectInfo =
+    editingId && editingGroupSnapshot
+      ? { className: editingGroupSnapshot.className, umkmName: editingGroupSnapshot.umkmName }
+      : (projectDetails[projectId] ?? { className: "", umkmName: "" });
+
+  const canOpenPicker = studyProgram !== "" && derivedProjectInfo.className !== "" && members.length < MAX_MEMBERS;
   const pickerHelperText =
-    studyProgram === "" || className === ""
-      ? "Pilih program studi dan kelas terlebih dahulu."
+    studyProgram === "" || derivedProjectInfo.className === ""
+      ? "Pilih program studi dan project terlebih dahulu."
       : members.length >= MAX_MEMBERS
         ? "Sudah mencapai maksimal 5 anggota."
         : null;
 
   const errors = {
+    projectId: projectId === "" ? "Project wajib dipilih." : null,
     name:
       name.trim().length < NAME_MIN_LENGTH || name.trim().length > NAME_MAX_LENGTH
         ? "Nama kelompok wajib diisi."
         : null,
     studyProgram: studyProgram === "" ? "Program studi wajib dipilih." : null,
-    className: className === "" ? "Kelas wajib dipilih." : null,
-    umkmId: umkmId === "" ? "UMKM mitra wajib dipilih." : null,
     members:
       members.length < MIN_MEMBERS
         ? "Minimal 2 mahasiswa dalam satu kelompok."
@@ -117,18 +232,14 @@ export default function TambahKelompokPage() {
 
   const resetForm = () => {
     setEditingId(null);
+    setEditingGroupSnapshot(null);
+    setProjectId("");
     setName("");
     setStudyProgram("");
-    setClassName("");
-    setUmkmId("");
     setMembers([]);
     setNote("");
     setTouched(false);
-  };
-
-  const handleStudyProgramChange = (value: string) => {
-    setStudyProgram(value);
-    setClassName("");
+    setSubmitError(null);
   };
 
   const handleAddMembers = (selected: { id: string; nim: string; name: string }[]) => {
@@ -140,15 +251,16 @@ export default function TambahKelompokPage() {
     setMembers((prev) => prev.filter((m) => m.id !== id));
   };
 
-  const handleEditClick = (group: SupervisedGroup) => {
+  const handleEditClick = (group: KelompokBimbingan) => {
     setEditingId(group.id);
+    setEditingGroupSnapshot(group);
+    setProjectId(group.projectId);
     setName(group.name);
-    setStudyProgram(group.studyProgram);
-    setClassName(group.className);
-    setUmkmId(group.umkmId);
+    setStudyProgram(group.studyProgram !== "-" ? group.studyProgram : "");
     setMembers(group.members);
-    setNote(group.note);
+    setNote(group.catatan);
     setTouched(false);
+    setSubmitError(null);
   };
 
   const handleCancel = () => {
@@ -159,69 +271,109 @@ export default function TambahKelompokPage() {
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setTouched(true);
+    setSubmitError(null);
     if (!isValid) return;
+    if (isSubmitting) return;
 
-    const umkm = UMKM_OPTIONS.find((u) => u.id === umkmId);
-    if (!umkm) {
-      setToast("UMKM yang dipilih tidak ditemukan. Pilih UMKM lain.");
-      return;
-    }
+    setIsSubmitting(true);
+    try {
+      const profile = await getCurrentProfile();
+      const { data: dosenRow, error: dosenError } = await supabase
+        .from("dosen")
+        .select("id")
+        .eq("profile_id", profile.id)
+        .maybeSingle();
+      if (dosenError) throw dosenError;
+      if (!dosenRow) throw new Error("Data dosen untuk akun ini tidak ditemukan.");
 
-    if (editingId) {
-      const existing = groups.find((g) => g.id === editingId);
-      if (!existing) return;
-      const updated: SupervisedGroup = {
-        ...existing,
-        name: name.trim(),
-        code: buildGroupCode(studyProgram, className, name.trim()),
-        studyProgram,
-        className,
-        umkmId,
-        umkmName: umkm.name,
-        members,
-        note: note.trim(),
-      };
-      updateGroup(updated);
-      setToast("Kelompok berhasil diperbarui.");
-    } else {
-      const group: SupervisedGroup = {
-        id: createGroupId(name.trim(), groups),
-        code: buildGroupCode(studyProgram, className, name.trim()),
-        name: name.trim(),
-        studyProgram,
-        className,
-        umkmId,
-        umkmName: umkm.name,
-        lecturerName: lecturerDashboard.lecturerName,
-        members,
-        note: note.trim(),
-        createdAt: new Date().toISOString(),
-        period: "4 Januari - 4 Juli 2026",
-        progressPercentage: 0,
-        currentStage: PROJECT_STAGE_TITLES[0],
-        status: "progress",
-      };
-      addGroup(group);
-      setToast("Kelompok berhasil disimpan.");
+      if (editingId) {
+        // UPDATE kelompok + reconcile kelompok_anggota (hapus semua, insert ulang sesuai form).
+        const { error: updateError } = await supabase
+          .from("kelompok")
+          .update({ nama_kelompok: name.trim(), catatan: note.trim() || null })
+          .eq("id", editingId);
+        if (updateError) throw updateError;
+
+        const { error: deleteAnggotaError } = await supabase
+          .from("kelompok_anggota")
+          .delete()
+          .eq("kelompok_id", editingId);
+        if (deleteAnggotaError) throw deleteAnggotaError;
+
+        if (members.length > 0) {
+          const { error: insertAnggotaError } = await supabase
+            .from("kelompok_anggota")
+            .insert(members.map((m) => ({ kelompok_id: editingId, mahasiswa_id: m.id })));
+          if (insertAnggotaError) throw insertAnggotaError;
+        }
+
+        setToast("Kelompok berhasil diperbarui.");
+      } else {
+        const { data: insertedKelompok, error: insertError } = await supabase
+          .from("kelompok")
+          .insert({
+            project_id: projectId,
+            nama_kelompok: name.trim(),
+            status: "aktif",
+            catatan: note.trim() || null,
+          })
+          .select("id")
+          .single();
+        if (insertError) throw insertError;
+
+        if (members.length > 0) {
+          const { error: insertAnggotaError } = await supabase
+            .from("kelompok_anggota")
+            .insert(members.map((m) => ({ kelompok_id: insertedKelompok.id as string, mahasiswa_id: m.id })));
+          if (insertAnggotaError) throw insertAnggotaError;
+        }
+
+        setToast("Kelompok berhasil disimpan.");
+      }
+
+      await refetch();
+      resetForm();
+      setIsSubmitting(false);
+    } catch (error) {
+      console.error("Failed to save kelompok", error);
+      setSubmitError("Gagal menyimpan kelompok. Silakan coba lagi.");
+      setIsSubmitting(false);
     }
-    resetForm();
   };
 
   const totalPages = Math.max(1, Math.ceil(groups.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
   const paginatedGroups = groups.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
-  const handleConfirmDelete = () => {
-    if (!deletingGroup) return;
-    removeGroup(deletingGroup.id);
-    if (editingId === deletingGroup.id) {
-      resetForm();
+  const handleConfirmDelete = async () => {
+    if (!deletingGroup || isDeleting) return;
+
+    setIsDeleting(true);
+    try {
+      const { error: deleteAnggotaError } = await supabase
+        .from("kelompok_anggota")
+        .delete()
+        .eq("kelompok_id", deletingGroup.id);
+      if (deleteAnggotaError) throw deleteAnggotaError;
+
+      const { error: deleteError } = await supabase.from("kelompok").delete().eq("id", deletingGroup.id);
+      if (deleteError) throw deleteError;
+
+      if (editingId === deletingGroup.id) {
+        resetForm();
+      }
+      setDeletingGroup(null);
+      setToast("Kelompok berhasil dihapus.");
+      await refetch();
+    } catch (error) {
+      console.error("Failed to delete kelompok", error);
+      setToast("Gagal menghapus kelompok. Silakan coba lagi.");
+    } finally {
+      setIsDeleting(false);
     }
-    setDeletingGroup(null);
-    setToast("Kelompok berhasil dihapus.");
   };
 
   return (
@@ -242,6 +394,19 @@ export default function TambahKelompokPage() {
           <Card className="min-w-0 rounded-2xl p-6">
             <div className="flex flex-col gap-5">
               <div className="flex flex-col gap-1.5">
+                <Select
+                  label="Pilih Project"
+                  id="projectId"
+                  options={[{ value: "", label: "Pilih project" }, ...projectOptions]}
+                  value={projectId}
+                  onChange={(e) => setProjectId(e.target.value)}
+                  disabled={editingId !== null}
+                  required
+                />
+                {touched && errors.projectId && <p className="text-xs text-pink">{errors.projectId}</p>}
+              </div>
+
+              <div className="flex flex-col gap-1.5">
                 <Input
                   label="Nama Kelompok"
                   id="name"
@@ -260,7 +425,7 @@ export default function TambahKelompokPage() {
                     id="studyProgram"
                     options={studyProgramOptions}
                     value={studyProgram}
-                    onChange={(e) => handleStudyProgramChange(e.target.value)}
+                    onChange={(e) => setStudyProgram(e.target.value)}
                     required
                   />
                   {touched && errors.studyProgram && (
@@ -269,31 +434,34 @@ export default function TambahKelompokPage() {
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <Select
-                    label="Pilih Kelas"
+                    label="Kelas"
                     id="className"
-                    options={classOptions}
-                    value={className}
-                    onChange={(e) => setClassName(e.target.value)}
-                    disabled={studyProgram === ""}
-                    required
+                    options={
+                      derivedProjectInfo.className
+                        ? [{ value: derivedProjectInfo.className, label: derivedProjectInfo.className }]
+                        : [{ value: "", label: "-" }]
+                    }
+                    value={derivedProjectInfo.className}
+                    onChange={() => {}}
+                    disabled
                   />
-                  {touched && errors.className && <p className="text-xs text-pink">{errors.className}</p>}
                 </div>
               </div>
 
               <div className="flex flex-col gap-1.5">
                 <Select
-                  label="Pilih UMKM Mitra"
+                  label="UMKM Mitra"
                   id="umkm"
-                  options={umkmOptionsWithAvailability}
-                  value={umkmId}
-                  onChange={(e) => setUmkmId(e.target.value)}
-                  required
+                  options={
+                    derivedProjectInfo.umkmName
+                      ? [{ value: derivedProjectInfo.umkmName, label: derivedProjectInfo.umkmName }]
+                      : [{ value: "", label: "-" }]
+                  }
+                  value={derivedProjectInfo.umkmName}
+                  onChange={() => {}}
+                  disabled
                 />
-                {touched && errors.umkmId && <p className="text-xs text-pink">{errors.umkmId}</p>}
               </div>
-
-              <Input label="Dosen Pembimbing" id="lecturer" value={lecturerDashboard.lecturerName} disabled />
 
               <div>
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -360,11 +528,13 @@ export default function TambahKelompokPage() {
                 </span>
               </div>
 
+              {submitError && <p className="text-sm font-medium text-red-600">{submitError}</p>}
+
               <div className="flex justify-end gap-3">
-                <Button type="button" variant="outline" onClick={handleCancel}>
+                <Button type="button" variant="outline" onClick={handleCancel} disabled={isSubmitting}>
                   {editingId ? "Batal Edit" : "Batal"}
                 </Button>
-                <Button type="submit" variant="secondary">
+                <Button type="submit" variant="secondary" disabled={isSubmitting || !supportDataHydrated}>
                   {editingId ? "Simpan Perubahan" : "Simpan"}
                 </Button>
               </div>
@@ -393,6 +563,10 @@ export default function TambahKelompokPage() {
                         <p className="min-w-0 truncate text-sm font-semibold text-navy">{group.name}</p>
                       </div>
                       <dl className="mt-3 flex flex-col gap-1 text-xs text-muted">
+                        <div className="flex gap-1">
+                          <dt className="shrink-0">Project:</dt>
+                          <dd className="min-w-0 truncate text-navy">{group.projectTitle}</dd>
+                        </div>
                         <div className="flex gap-1">
                           <dt className="shrink-0">Prodi:</dt>
                           <dd className="min-w-0 truncate text-navy">{group.studyProgram}</dd>
@@ -474,10 +648,10 @@ export default function TambahKelompokPage() {
           Kelompok dan relasinya akan dihapus dari daftar bimbingan. Data mahasiswa tidak ikut terhapus.
         </p>
         <div className="mt-5 flex justify-end gap-3">
-          <Button type="button" variant="outline" onClick={() => setDeletingGroup(null)}>
+          <Button type="button" variant="outline" onClick={() => setDeletingGroup(null)} disabled={isDeleting}>
             Batal
           </Button>
-          <Button type="button" variant="danger" onClick={handleConfirmDelete}>
+          <Button type="button" variant="danger" onClick={handleConfirmDelete} disabled={isDeleting}>
             Hapus
           </Button>
         </div>

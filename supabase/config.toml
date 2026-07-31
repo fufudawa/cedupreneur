@@ -18,3 +18,19 @@ refresh_token_reuse_interval = 10
 [functions.create-user]
 enabled = true
 verify_jwt = true
+
+[functions.update-user]
+enabled = true
+verify_jwt = true
+
+[functions.delete-user]
+enabled = true
+verify_jwt = true
+
+[functions.change-user-role]
+enabled = true
+verify_jwt = true
+
+[functions.reset-user-password]
+enabled = true
+verify_jwt = true

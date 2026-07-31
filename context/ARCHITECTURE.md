@@ -8,15 +8,16 @@ CEdPreneur is a web app built with **Next.js (App Router) + TypeScript + Tailwin
 - **Mahasiswa** (student) — works on projects, uploads progress, views mitra (partner) profile.
 - **Mitra UMKM** (business partner) — mentors/gives feedback to student groups, manages own business profile.
 
-The project is currently **frontend-only**: no backend or Supabase integration. All data comes from local dummy fixtures.
+The backend is **real Supabase** (Postgres + Auth + Storage + Edge Functions) — every page in the MVP scope reads/writes live data through role-scoped RLS policies. See `PRD.md`'s "Current implementation state" for how auth/mutations are wired.
 
 ## Folder structure
 
 ```
 app/            Route pages (Next.js App Router)
 components/     Reusable UI, layout, and shared components
-data/           Dummy/fixture data (no API calls)
-lib/            Small helpers and integration placeholders
+data/           Legacy dummy fixtures — mostly dead code now (see note below)
+lib/            Real Supabase-backed hooks/clients + a handful of pure helpers
+supabase/       Edge Functions (supabase/functions/*) + seed.sql + config
 types/          Shared TypeScript types
 public/         Static assets (including the real brand logo)
 context/        This documentation set
@@ -34,12 +35,17 @@ context/        This documentation set
 - `components/shared/` — cross-page composed pieces: `PageHeader`, `StatCard`, `LoginForm`, `RoleLoginCard`, `BrandMark`, `icons.tsx`.
 
 ### `data/`
-Dummy data only — `users`, `akademik` (mata kuliah, kelas), `umkm`, `projects` (projects, groups, progress, feedback). Imported directly via `@/data`. No fetches, no API routes.
+Leftover from the pre-Supabase build. No page imports from `@/data` anymore except indirectly via `lib/auth.ts`, which still uses `data/users.ts`'s `CURRENT_USER` as an SSR-safe placeholder object for `RoleLayout`'s very first render (before the real account name loads client-side) — that's the one deliberate survivor. The rest (`akademik`, `umkm`, `projects`, `dosenDashboard`, `dosenProject`) are dead code kept around rather than deleted; verify with a repo-wide import search before assuming any of them are load-bearing.
 
 ### `lib/`
-- `lib/auth.ts` — placeholder; `getCurrentUser(role)` returns the dummy logged-in user for a given role.
-- `lib/supabaseClient.ts` — placeholder only, not wired up to any real Supabase project.
+- `lib/auth.ts` — real Supabase Auth: `loginWithEmail`/`loginWithNip`/`loginWithNim`, `getCurrentProfile()`, `requireRole()`, `signOut()`. `getCurrentUser(role)` is the one remaining dummy-backed export (see `data/` note above).
+- `lib/supabaseClient.ts` — the real Supabase JS client, configured against the live project.
+- `lib/use<Role><Thing>.ts` (e.g. `useAdminUsers`, `useAdminMonitoring`, `useAdminMasterData`, `useDosenKelompokBimbingan`, `useMahasiswaKelompok`, `useUmkmKelompok`, `useKelasUmkm`) — the real per-page/per-role Supabase data hooks; this is where almost all query logic lives.
 - `lib/utils.ts` — small helpers (e.g. `cn` for class merging).
+
+### `supabase/`
+- `supabase/functions/*` — Edge Functions for admin-only user management (`create-user`, `update-user`, `delete-user`, `reset-user-password`, `change-user-role`). Each has its own `requireAdmin()` check re-verifying the caller's role server-side — `verify_jwt: true` in isolation is not sufficient.
+- `supabase/seed.sql`, `supabase/config.toml` — local project config/seed.
 
 ### `types/`
 `Role`, `User`, `MataKuliah`, `Kelas`, `Project`, `Group`, `Progress`, `Feedback`, `Umkm`.

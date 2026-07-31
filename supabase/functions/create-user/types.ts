@@ -16,12 +16,15 @@ export interface CreateUserPayload {
   nip?: unknown;
   nim?: unknown;
   fakultas?: unknown;
+  jabatan?: unknown;
+  mata_kuliah?: unknown;
   prodi?: unknown;
   angkatan?: unknown;
   nama_usaha?: unknown;
   sektor_usaha?: unknown;
   alamat?: unknown;
   deskripsi_usaha?: unknown;
+  kontak?: unknown;
 }
 
 /** Fields common to every role after validation. */
@@ -39,6 +42,8 @@ export interface DosenInput extends BaseInput {
   role: "dosen";
   nip: string;
   fakultas: string;
+  jabatan: string | null;
+  mataKuliah: string[];
 }
 
 export interface MahasiswaInput extends BaseInput {
@@ -55,6 +60,7 @@ export interface UmkmInput extends BaseInput {
   sektor_usaha: string;
   alamat: string;
   deskripsi_usaha: string;
+  kontak: string | null;
 }
 
 /** Discriminated union of all valid, normalized inputs. */
