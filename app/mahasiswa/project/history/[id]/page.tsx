@@ -30,7 +30,6 @@ interface LaporanRow {
   id: string;
   judul_laporan: string | null;
   isi_laporan: string | null;
-  persentase_progress: number | null;
   status: string | null;
   tanggal_submit: string | null;
   created_at: string | null;
@@ -71,7 +70,7 @@ export default function ProjectHistoryDetailPage({ params }: { params: Promise<{
       try {
         const { data: laporanData, error: laporanError } = await supabase
           .from("laporan_progress")
-          .select("id, judul_laporan, isi_laporan, persentase_progress, status, tanggal_submit, created_at")
+          .select("id, judul_laporan, isi_laporan, status, tanggal_submit, created_at")
           .eq("id", id)
           .maybeSingle();
         if (laporanError) throw laporanError;
@@ -144,11 +143,7 @@ export default function ProjectHistoryDetailPage({ params }: { params: Promise<{
             </Badge>
           </div>
 
-          <dl className="mt-5 grid grid-cols-1 gap-4 text-sm sm:grid-cols-2">
-            <div>
-              <dt className="text-muted">Progress</dt>
-              <dd className="mt-1 font-medium text-navy">{laporan.persentase_progress ?? 0}%</dd>
-            </div>
+          <dl className="mt-5 grid grid-cols-1 gap-4 text-sm">
             <div>
               <dt className="text-muted">Tanggal &amp; Waktu Upload</dt>
               <dd className="mt-1 font-medium text-navy">{formatDateTime(laporan.tanggal_submit ?? laporan.created_at)}</dd>

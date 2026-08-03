@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "./supabaseClient";
+import { calculateTugasProgress } from "./useProjectTugas";
 
 export interface AdminMonitoringMember {
   id: string;
@@ -105,6 +106,7 @@ interface RawKelompokRow {
       mata_kuliah: { nama_mk: string | null } | null;
     } | null;
     umkm: { id: string; nama_usaha: string | null } | null;
+    project_tugas: { is_selesai: boolean }[] | null;
   } | null;
   kelompok_anggota: { mahasiswa: RawMahasiswaRow | null }[] | null;
   laporan_progress: RawLaporanRow[] | null;
@@ -170,7 +172,7 @@ function mapKelompokRow(row: RawKelompokRow, dosenById: Map<string, { name: stri
     umkmName: umkm?.nama_usaha ?? "-",
     members,
     laporan,
-    progress: laporan.find((l) => l.status !== "draft")?.persentaseProgress ?? 0,
+    progress: calculateTugasProgress(row.project?.project_tugas ?? []),
     createdAt: row.created_at,
   };
 }
@@ -207,7 +209,8 @@ async function fetchAdminMonitoring(): Promise<AdminMonitoringGroup[]> {
             tahun_ajaran,
             mata_kuliah ( nama_mk )
           ),
-          umkm ( id, nama_usaha )
+          umkm ( id, nama_usaha ),
+          project_tugas ( is_selesai )
         ),
         kelompok_anggota (
           mahasiswa ( id, nim, prodi, profiles ( nama_lengkap ) )

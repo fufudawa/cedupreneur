@@ -8,5 +8,8 @@
       "Bash(npm run *)",
       "mcp__plugin_supabase_supabase__execute_sql"
     ]
+  },
+  "enabledPlugins": {
+    "vercel@claude-plugins-official": true
   }
 }

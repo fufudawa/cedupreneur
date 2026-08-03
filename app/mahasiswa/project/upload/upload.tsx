@@ -14,7 +14,6 @@ export default function UploadProgressPage() {
   const [isDragging, setIsDragging] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [judul, setJudul] = useState("");
-  const [progress, setProgress] = useState("");
   const [comment, setComment] = useState("");
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -53,14 +52,9 @@ export default function UploadProgressPage() {
     if (isSubmitting || !activeGroup) return;
 
     const judulTrimmed = judul.trim();
-    const progressNumber = Number(progress);
 
     if (judulTrimmed === "") {
       setError("Judul laporan wajib diisi.");
-      return;
-    }
-    if (progress === "" || Number.isNaN(progressNumber) || progressNumber < 0 || progressNumber > 100) {
-      setError("Persentase progress harus berupa angka 0-100.");
       return;
     }
     if (!file) {
@@ -78,7 +72,6 @@ export default function UploadProgressPage() {
           kelompok_id: activeGroup.id,
           judul_laporan: judulTrimmed,
           isi_laporan: comment.trim() || null,
-          persentase_progress: progressNumber,
           status: "draft",
         })
         .select("id")
@@ -131,24 +124,10 @@ export default function UploadProgressPage() {
               }}
             />
           </div>
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-slate-700" htmlFor="progress-persen">
-              Progress (%)
-            </label>
-            <Input
-              id="progress-persen"
-              type="number"
-              min={0}
-              max={100}
-              placeholder="0 - 100"
-              value={progress}
-              onChange={(e) => {
-                setProgress(e.target.value);
-                setError("");
-              }}
-            />
-          </div>
         </div>
+        <p className="mt-3 text-xs text-slate-400">
+          Progress project sekarang otomatis dihitung dari tugas yang ditandai selesai oleh Dosen, bukan diisi manual di sini.
+        </p>
       </div>
 
       {/* Add File Progress */}

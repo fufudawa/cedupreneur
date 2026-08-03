@@ -30,7 +30,6 @@ const STATUS_OPTIONS = [
 interface LaporanRow {
   id: string;
   judul_laporan: string | null;
-  persentase_progress: number | null;
   status: string | null;
   created_at: string | null;
 }
@@ -69,7 +68,7 @@ export default function ProjectHistoryPage() {
       try {
         const { data, error } = await supabase
           .from("laporan_progress")
-          .select("id, judul_laporan, persentase_progress, status, created_at")
+          .select("id, judul_laporan, status, created_at")
           .eq("kelompok_id", activeGroup.id)
           .order("created_at", { ascending: false });
         if (error) throw error;
@@ -161,7 +160,7 @@ export default function ProjectHistoryPage() {
                           {report.judul_laporan ?? "Laporan Progress"}
                         </p>
                         <p className="text-xs text-muted">
-                          {date}, {time} &middot; {report.persentase_progress ?? 0}%
+                          {date}, {time}
                         </p>
                       </div>
                     </div>

@@ -7,6 +7,7 @@ import { PageHeader, StatCard } from "@/components/shared";
 import { Card, CardHeader, CardTitle, Badge, ProgressBar } from "@/components/ui";
 import { supabase } from "@/lib/supabaseClient";
 import { formatRelativeTime } from "@/lib/adminDashboardData";
+import { calculateTugasProgress } from "@/lib/useProjectTugas";
 
 /** Raw shape of the `activity_log` + `profiles` (for nama_lengkap) join. */
 interface ActivityLogJoinRow {
@@ -51,8 +52,8 @@ interface KelompokProgressJoinRow {
   project: {
     kelas: { nama_kelas: string | null } | null;
     umkm: { nama_usaha: string | null } | null;
+    project_tugas: { is_selesai: boolean }[] | null;
   } | null;
-  laporan_progress: { persentase_progress: number | null; created_at: string | null }[] | null;
 }
 
 interface ProgressTableRow {
@@ -65,13 +66,12 @@ interface ProgressTableRow {
 }
 
 function mapProgressJoinRow(row: KelompokProgressJoinRow): ProgressTableRow {
-  const latestLaporan = row.laporan_progress?.[0];
   return {
     id: row.id,
     kelompokName: row.nama_kelompok ?? "-",
     kelasName: row.project?.kelas?.nama_kelas ?? "-",
     umkmName: row.project?.umkm?.nama_usaha ?? "-",
-    progress: latestLaporan?.persentase_progress ?? 0,
+    progress: calculateTugasProgress(row.project?.project_tugas ?? []),
     status: row.status,
   };
 }
@@ -193,16 +193,11 @@ export default function AdminDashboardPage() {
               status,
               project (
                 kelas ( nama_kelas ),
-                umkm ( nama_usaha )
-              ),
-              laporan_progress (
-                persentase_progress,
-                created_at
+                umkm ( nama_usaha ),
+                project_tugas ( is_selesai )
               )
             `
           )
-          .order("created_at", { ascending: false, referencedTable: "laporan_progress" })
-          .limit(1, { foreignTable: "laporan_progress" })
           .limit(3);
 
         if (error) throw error;

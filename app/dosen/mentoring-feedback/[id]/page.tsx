@@ -34,7 +34,6 @@ interface LaporanRow {
   id: string;
   judul_laporan: string | null;
   isi_laporan: string | null;
-  persentase_progress: number | null;
   status: string | null;
   tanggal_submit: string | null;
   created_at: string | null;
@@ -90,7 +89,7 @@ export default function DosenMentoringDetailPage({ params }: { params: Promise<{
       try {
         const { data: laporanData, error: laporanError } = await supabase
           .from("laporan_progress")
-          .select("id, judul_laporan, isi_laporan, persentase_progress, status, tanggal_submit, created_at")
+          .select("id, judul_laporan, isi_laporan, status, tanggal_submit, created_at")
           .eq("kelompok_id", id)
           .order("created_at", { ascending: false });
         if (laporanError) throw laporanError;
@@ -301,7 +300,6 @@ export default function DosenMentoringDetailPage({ params }: { params: Promise<{
                     <Clock3 size={14} strokeWidth={2} />
                     {formatDateTime(activeLaporan.tanggal_submit)}
                   </span>
-                  <span>Progress: {activeLaporan.persentase_progress ?? 0}%</span>
                 </div>
               </Card>
 

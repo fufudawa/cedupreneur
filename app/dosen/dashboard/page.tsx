@@ -8,6 +8,7 @@ import { Card, CardHeader, CardTitle, Button, Timeline, ProgressBar, Badge } fro
 import type { TimelineItem } from "@/components/ui";
 import { supabase } from "@/lib/supabaseClient";
 import { getCurrentProfile } from "@/lib/auth";
+import { calculateTugasProgress } from "@/lib/useProjectTugas";
 
 const REPORT_STATUS_LABEL: Record<string, string> = {
   draft: "Draft",
@@ -95,6 +96,7 @@ interface SupervisedGroupJoinRow {
     status: ProjectStatus | null;
     created_by: string;
     umkm: { nama_usaha: string | null } | null;
+    project_tugas: { is_selesai: boolean }[] | null;
   } | null;
   kelompok_anggota: { mahasiswa_id: string }[] | null;
   laporan_progress: { persentase_progress: number | null; created_at: string | null }[] | null;
@@ -113,7 +115,6 @@ interface SupervisedGroupSummary {
 }
 
 function mapSupervisedGroupRow(row: SupervisedGroupJoinRow): SupervisedGroupSummary {
-  const latestLaporan = row.laporan_progress?.[0];
   const projectStatus = row.project?.status ?? null;
 
   return {
@@ -122,7 +123,7 @@ function mapSupervisedGroupRow(row: SupervisedGroupJoinRow): SupervisedGroupSumm
     projectName: row.project?.judul_project ?? "-",
     umkmName: row.project?.umkm?.nama_usaha ?? "-",
     memberCount: row.kelompok_anggota?.length ?? 0,
-    latestProgress: latestLaporan?.persentase_progress ?? 0,
+    latestProgress: calculateTugasProgress(row.project?.project_tugas ?? []),
     projectStatus,
     projectStatusLabel: projectStatus ? PROJECT_STATUS_LABEL[projectStatus] : "-",
     projectStatusVariant: projectStatus ? PROJECT_STATUS_VARIANT[projectStatus] : "gray",
@@ -280,7 +281,7 @@ export default function DosenDashboardPage() {
         const recentReports: TimelineItem[] = laporanRows.slice(0, 5).map((row, index) => ({
           id: `${row.kelompok_id}-${row.created_at ?? index}`,
           title: row.judul_laporan ?? "Laporan Progress",
-          description: `${kelompokNameById.get(row.kelompok_id) ?? "-"} • ${row.persentase_progress ?? 0}% • ${
+          description: `${kelompokNameById.get(row.kelompok_id) ?? "-"} • ${
             REPORT_STATUS_LABEL[row.status ?? ""] ?? "-"
           }`,
           status: REPORT_STATUS_TIMELINE[row.status ?? ""] ?? "belum",
@@ -344,7 +345,8 @@ export default function DosenDashboardPage() {
                 judul_project,
                 status,
                 created_by,
-                umkm ( nama_usaha )
+                umkm ( nama_usaha ),
+                project_tugas ( is_selesai )
               ),
               kelompok_anggota ( mahasiswa_id ),
               laporan_progress ( persentase_progress, created_at )

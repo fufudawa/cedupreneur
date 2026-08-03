@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "./supabaseClient";
 import { getCurrentProfile } from "./auth";
+import { calculateTugasProgress } from "./useProjectTugas";
 
 export interface UmkmKelompokMember {
   id: string;
@@ -61,6 +62,7 @@ interface KelompokJoinRow {
       mata_kuliah: { nama_mk: string | null } | null;
     } | null;
     umkm: { nama_usaha: string | null } | null;
+    project_tugas: { is_selesai: boolean }[] | null;
   } | null;
   kelompok_anggota: { mahasiswa: RawMahasiswaRow | null }[] | null;
   laporan_progress: { persentase_progress: number | null; status: string | null; created_at: string | null }[] | null;
@@ -107,7 +109,7 @@ function mapKelompokRow(row: KelompokJoinRow): UmkmKelompok {
     period: kelas?.tahun_ajaran ?? "-",
     umkmName: umkm?.nama_usaha ?? "-",
     members,
-    progress: latest?.persentase_progress ?? 0,
+    progress: calculateTugasProgress(row.project?.project_tugas ?? []),
     reportCount,
     status: row.status,
     mentoringStatus: mapMentoringStatus(reportCount > 0, latest?.status),
@@ -141,7 +143,8 @@ async function fetchUmkmKelompok(): Promise<UmkmKelompok[]> {
             tahun_ajaran,
             mata_kuliah ( nama_mk )
           ),
-          umkm ( nama_usaha )
+          umkm ( nama_usaha ),
+          project_tugas ( is_selesai )
         ),
         kelompok_anggota (
           mahasiswa ( id, nim, prodi, profiles ( nama_lengkap ) )

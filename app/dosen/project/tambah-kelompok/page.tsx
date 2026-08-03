@@ -339,7 +339,11 @@ export default function TambahKelompokPage() {
       setIsSubmitting(false);
     } catch (error) {
       console.error("Failed to save kelompok", error);
-      setSubmitError("Gagal menyimpan kelompok. Silakan coba lagi.");
+      const message =
+        error instanceof Error && error.message.includes("sudah memiliki kelompok aktif lain")
+          ? error.message
+          : "Gagal menyimpan kelompok. Silakan coba lagi.";
+      setSubmitError(message);
       setIsSubmitting(false);
     }
   };

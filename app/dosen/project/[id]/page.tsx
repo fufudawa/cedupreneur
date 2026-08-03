@@ -5,9 +5,10 @@ import { notFound, useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { PageHeader, Modal } from "@/components/shared";
-import { Card, Badge, Button, Input, Textarea } from "@/components/ui";
+import { Card, Badge, Button, Input, Textarea, ProgressBar } from "@/components/ui";
 import { supabase } from "@/lib/supabaseClient";
 import { getCurrentProfile } from "@/lib/auth";
+import { useProjectTugas } from "@/lib/useProjectTugas";
 
 type ProjectStatus = "draft" | "berjalan" | "selesai";
 
@@ -16,6 +17,31 @@ const STATUS_BADGE: Record<ProjectStatus, { label: string; variant: "green" | "o
   berjalan: { label: "Berjalan", variant: "orange" },
   draft: { label: "Belum Dimulai", variant: "blue" },
 };
+
+const LAPORAN_STATUS_LABEL: Record<string, string> = {
+  draft: "Draft",
+  submitted: "Menunggu Feedback",
+  reviewed: "Selesai Direview",
+};
+
+const LAPORAN_STATUS_VARIANT: Record<string, "gray" | "orange" | "green"> = {
+  draft: "gray",
+  submitted: "orange",
+  reviewed: "green",
+};
+
+interface LaporanMahasiswaRow {
+  id: string;
+  judulLaporan: string;
+  status: string | null;
+  fileUrl: string | null;
+  tanggalSubmit: string | null;
+  createdAt: string | null;
+  kelompokId: string;
+  kelompokNama: string;
+}
+
+const LAPORAN_PROGRESS_BUCKET = "laporan-progress";
 
 const DESCRIPTION_MIN_LENGTH = 10;
 
@@ -75,6 +101,16 @@ export default function DetailProjectPage({ params }: { params: Promise<{ id: st
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
 
+  const [laporanList, setLaporanList] = useState<LaporanMahasiswaRow[]>([]);
+  const [laporanError, setLaporanError] = useState<string | null>(null);
+  const [openingLaporanId, setOpeningLaporanId] = useState<string | null>(null);
+
+  const { tugasList, progress: tugasProgress, addTugas, toggleSelesai, removeTugas } = useProjectTugas(id);
+  const [newTugasTitle, setNewTugasTitle] = useState("");
+  const [isAddingTugas, setIsAddingTugas] = useState(false);
+  const [tugasError, setTugasError] = useState<string | null>(null);
+  const [updatingTugasId, setUpdatingTugasId] = useState<string | null>(null);
+
   useEffect(() => {
     let isMounted = true;
 
@@ -130,6 +166,44 @@ export default function DetailProjectPage({ params }: { params: Promise<{ id: st
           } else if (isMounted) {
             setFileSignedUrl(signedData.signedUrl);
           }
+        }
+
+        try {
+          const { data: kelompokRows, error: kelompokError } = await supabase
+            .from("kelompok")
+            .select("id, nama_kelompok")
+            .eq("project_id", id);
+          if (kelompokError) throw kelompokError;
+
+          const kelompokIds = (kelompokRows ?? []).map((k) => k.id as string);
+          const kelompokNameById = new Map((kelompokRows ?? []).map((k) => [k.id as string, (k.nama_kelompok as string | null) ?? "-"]));
+
+          let laporanRows: LaporanMahasiswaRow[] = [];
+          if (kelompokIds.length > 0) {
+            const { data: laporanData, error: laporanErr } = await supabase
+              .from("laporan_progress")
+              .select("id, judul_laporan, status, file_url, tanggal_submit, created_at, kelompok_id")
+              .in("kelompok_id", kelompokIds)
+              .neq("status", "draft")
+              .order("created_at", { ascending: false });
+            if (laporanErr) throw laporanErr;
+
+            laporanRows = (laporanData ?? []).map((l) => ({
+              id: l.id as string,
+              judulLaporan: (l.judul_laporan as string | null) ?? "Laporan Progress",
+              status: l.status as string | null,
+              fileUrl: l.file_url as string | null,
+              tanggalSubmit: l.tanggal_submit as string | null,
+              createdAt: l.created_at as string | null,
+              kelompokId: l.kelompok_id as string,
+              kelompokNama: kelompokNameById.get(l.kelompok_id as string) ?? "-",
+            }));
+          }
+
+          if (isMounted) setLaporanList(laporanRows);
+        } catch (error) {
+          console.error("Failed to load laporan mahasiswa (cek RLS SELECT kelompok/laporan_progress):", error);
+          if (isMounted) setLaporanList([]);
         }
       } catch (error) {
         console.error("Failed to load project detail", error);
@@ -268,6 +342,67 @@ export default function DetailProjectPage({ params }: { params: Promise<{ id: st
       setStatusError("Gagal mengubah status project. Silakan coba lagi.");
     } finally {
       setIsUpdatingStatus(false);
+    }
+  }
+
+  async function handleAddTugas(e: FormEvent) {
+    e.preventDefault();
+    const title = newTugasTitle.trim();
+    if (title === "" || isAddingTugas) return;
+
+    setTugasError(null);
+    setIsAddingTugas(true);
+    try {
+      await addTugas(title);
+      setNewTugasTitle("");
+    } catch (error) {
+      console.error("Failed to add tugas", error);
+      setTugasError("Gagal menambahkan tugas. Silakan coba lagi.");
+    } finally {
+      setIsAddingTugas(false);
+    }
+  }
+
+  async function handleToggleTugas(tugasId: string, nextValue: boolean) {
+    setTugasError(null);
+    setUpdatingTugasId(tugasId);
+    try {
+      await toggleSelesai(tugasId, nextValue);
+    } catch (error) {
+      console.error("Failed to update tugas", error);
+      setTugasError("Gagal memperbarui status tugas. Silakan coba lagi.");
+    } finally {
+      setUpdatingTugasId(null);
+    }
+  }
+
+  async function handleRemoveTugas(tugasId: string) {
+    setTugasError(null);
+    setUpdatingTugasId(tugasId);
+    try {
+      await removeTugas(tugasId);
+    } catch (error) {
+      console.error("Failed to remove tugas", error);
+      setTugasError("Gagal menghapus tugas. Silakan coba lagi.");
+    } finally {
+      setUpdatingTugasId(null);
+    }
+  }
+
+  async function handleOpenLaporanFile(laporanId: string, path: string) {
+    setLaporanError(null);
+    setOpeningLaporanId(laporanId);
+    try {
+      const { data, error } = await supabase.storage
+        .from(LAPORAN_PROGRESS_BUCKET)
+        .createSignedUrl(path, FILE_MATERI_SIGNED_URL_EXPIRY_SECONDS);
+      if (error || !data) throw error ?? new Error("Signed URL kosong.");
+      window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+    } catch (error) {
+      console.error("Failed to open laporan file (cek RLS storage.objects untuk bucket laporan-progress):", error);
+      setLaporanError("Gagal membuka file laporan. Silakan coba lagi.");
+    } finally {
+      setOpeningLaporanId(null);
     }
   }
 
@@ -435,6 +570,14 @@ export default function DetailProjectPage({ params }: { params: Promise<{ id: st
             </div>
             {statusError && <p className="mt-1 text-xs font-medium text-red-600">{statusError}</p>}
 
+            <div className="mt-4 flex items-center gap-4">
+              <ProgressBar value={tugasProgress} showLabel={false} className="flex-1" />
+              <span className="shrink-0 text-sm font-semibold text-navy">{tugasProgress}%</span>
+            </div>
+            <p className="mt-1 text-xs text-muted">
+              Progress dihitung dari tugas yang sudah ditandai selesai di bawah ({tugasList.filter((t) => t.isSelesai).length}/{tugasList.length}).
+            </p>
+
             <p className="mt-3 text-sm leading-relaxed text-navy">{project.deskripsi || "-"}</p>
 
             <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -496,6 +639,120 @@ export default function DetailProjectPage({ params }: { params: Promise<{ id: st
           </>
         )}
       </Card>
+
+      {!isEditing && (
+        <Card className="mt-6 min-w-0 rounded-2xl p-6">
+          <p className="text-base font-semibold text-navy">Daftar Tugas</p>
+          <p className="mt-0.5 text-xs text-muted">
+            Progress project di atas otomatis dihitung dari tugas yang ditandai selesai di sini.
+          </p>
+
+          {tugasError && <p className="mt-2 text-xs font-medium text-red-600">{tugasError}</p>}
+
+          {tugasList.length === 0 ? (
+            <p className="mt-4 text-sm text-muted">Belum ada tugas untuk project ini.</p>
+          ) : (
+            <div className="mt-4 flex flex-col divide-y divide-soft-gray-dark">
+              {tugasList.map((tugas) => (
+                <div key={tugas.id} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+                  <label className="flex min-w-0 items-center gap-3 text-sm text-navy">
+                    <input
+                      type="checkbox"
+                      checked={tugas.isSelesai}
+                      disabled={!isOwner || updatingTugasId === tugas.id}
+                      onChange={(e) => handleToggleTugas(tugas.id, e.target.checked)}
+                      className="h-4 w-4 shrink-0 rounded border-soft-gray-dark text-purple focus:ring-purple/30"
+                    />
+                    <span className={tugas.isSelesai ? "truncate line-through text-muted" : "truncate"}>
+                      {tugas.judulTugas}
+                    </span>
+                  </label>
+                  {isOwner && (
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveTugas(tugas.id)}
+                      disabled={updatingTugasId === tugas.id}
+                      className="shrink-0 text-xs font-medium text-red-600 hover:underline disabled:opacity-50"
+                    >
+                      Hapus
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {isOwner && (
+            <form onSubmit={handleAddTugas} className="mt-4 flex flex-col gap-2 sm:flex-row">
+              <Input
+                id="new-tugas"
+                placeholder="Tambah tugas baru, mis. Riset UMKM"
+                value={newTugasTitle}
+                onChange={(e) => setNewTugasTitle(e.target.value)}
+                className="flex-1"
+              />
+              <Button type="submit" variant="secondary" disabled={isAddingTugas || newTugasTitle.trim() === ""}>
+                {isAddingTugas ? "Menambah..." : "Tambah Tugas"}
+              </Button>
+            </form>
+          )}
+        </Card>
+      )}
+
+      {!isEditing && (
+        <Card className="mt-6 min-w-0 rounded-2xl p-6">
+          <p className="text-base font-semibold text-navy">Laporan Mahasiswa</p>
+          <p className="mt-0.5 text-xs text-muted">
+            Laporan progress yang sudah dikirim kelompok untuk project ini.
+          </p>
+
+          {laporanError && <p className="mt-2 text-xs font-medium text-red-600">{laporanError}</p>}
+
+          {laporanList.length === 0 ? (
+            <p className="mt-4 text-sm text-muted">Belum ada laporan yang dikirim untuk project ini.</p>
+          ) : (
+            <div className="mt-4 flex flex-col divide-y divide-soft-gray-dark">
+              {laporanList.map((laporan) => (
+                <div
+                  key={laporan.id}
+                  className="flex flex-col gap-2 py-4 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-navy">{laporan.judulLaporan}</p>
+                    <p className="mt-0.5 text-xs text-muted">
+                      {laporan.kelompokNama} &middot;{" "}
+                      {laporan.tanggalSubmit ?? laporan.createdAt
+                        ? formatDate((laporan.tanggalSubmit ?? laporan.createdAt) as string)
+                        : "-"}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap items-center gap-2">
+                    <Badge variant={LAPORAN_STATUS_VARIANT[laporan.status ?? "draft"] ?? "gray"}>
+                      {LAPORAN_STATUS_LABEL[laporan.status ?? "draft"] ?? laporan.status}
+                    </Badge>
+                    {laporan.fileUrl && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={openingLaporanId === laporan.id}
+                        onClick={() => handleOpenLaporanFile(laporan.id, laporan.fileUrl as string)}
+                      >
+                        {openingLaporanId === laporan.id ? "Membuka..." : "Buka File"}
+                      </Button>
+                    )}
+                    <Link href={`/dosen/mentoring-feedback/${laporan.kelompokId}`}>
+                      <Button type="button" variant="secondary" size="sm">
+                        Beri Feedback
+                      </Button>
+                    </Link>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
 
       <Modal
         open={deleteModalOpen}

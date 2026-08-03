@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "./supabaseClient";
 import { getCurrentProfile } from "./auth";
+import { calculateTugasProgress } from "./useProjectTugas";
 
 export interface MahasiswaKelompokMember {
   id: string;
@@ -43,6 +44,11 @@ export interface MahasiswaKelompok {
   umkmSector: string;
   umkmDescription: string;
   umkmOwnerName: string;
+  umkmFotoUrl: string | null;
+  umkmSwotStrength: string;
+  umkmSwotWeakness: string;
+  umkmSwotOpportunity: string;
+  umkmSwotThreat: string;
   members: MahasiswaKelompokMember[];
   progress: number;
   reportCount: number;
@@ -76,8 +82,14 @@ interface KelompokJoinRow {
       alamat: string | null;
       sektor_usaha: string | null;
       deskripsi_usaha: string | null;
+      foto_url: string | null;
+      swot_strength: string | null;
+      swot_weakness: string | null;
+      swot_opportunity: string | null;
+      swot_threat: string | null;
       profiles: { nama_lengkap: string | null } | null;
     } | null;
+    project_tugas: { is_selesai: boolean }[] | null;
   } | null;
   kelompok_anggota: { mahasiswa: RawMahasiswaRow | null }[] | null;
   laporan_progress: { persentase_progress: number | null; created_at: string | null }[] | null;
@@ -101,7 +113,6 @@ function mapKelompokRow(row: KelompokJoinRow, studyProgram: string): MahasiswaKe
   const laporanSorted = [...(row.laporan_progress ?? [])].sort(
     (a, b) => new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime()
   );
-  const latest = laporanSorted[0];
 
   const kelas = row.project?.kelas ?? null;
   const umkm = row.project?.umkm ?? null;
@@ -125,8 +136,13 @@ function mapKelompokRow(row: KelompokJoinRow, studyProgram: string): MahasiswaKe
     umkmSector: umkm?.sektor_usaha ?? "-",
     umkmDescription: umkm?.deskripsi_usaha ?? "",
     umkmOwnerName: umkm?.profiles?.nama_lengkap ?? "-",
+    umkmFotoUrl: umkm?.foto_url ? supabase.storage.from("umkm-foto").getPublicUrl(umkm.foto_url).data.publicUrl : null,
+    umkmSwotStrength: umkm?.swot_strength ?? "",
+    umkmSwotWeakness: umkm?.swot_weakness ?? "",
+    umkmSwotOpportunity: umkm?.swot_opportunity ?? "",
+    umkmSwotThreat: umkm?.swot_threat ?? "",
     members,
-    progress: latest?.persentase_progress ?? 0,
+    progress: calculateTugasProgress(row.project?.project_tugas ?? []),
     reportCount: laporanSorted.length,
     status: row.status,
   };
@@ -165,7 +181,8 @@ async function fetchMahasiswaKelompok(): Promise<MahasiswaKelompok[]> {
               tahun_ajaran,
               mata_kuliah ( nama_mk )
             ),
-            umkm ( id, nama_usaha, alamat, sektor_usaha, deskripsi_usaha, profiles ( nama_lengkap ) )
+            umkm ( id, nama_usaha, alamat, sektor_usaha, deskripsi_usaha, foto_url, swot_strength, swot_weakness, swot_opportunity, swot_threat, profiles ( nama_lengkap ) ),
+            project_tugas ( is_selesai )
           ),
           kelompok_anggota (
             mahasiswa ( id, nim, profiles ( nama_lengkap ) )
