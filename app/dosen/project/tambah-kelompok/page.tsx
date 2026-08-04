@@ -48,6 +48,7 @@ export default function TambahKelompokPage() {
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingGroupSnapshot, setEditingGroupSnapshot] = useState<KelompokBimbingan | null>(null);
+  const [selectedKelasId, setSelectedKelasId] = useState("");
   const [projectId, setProjectId] = useState("");
   const [name, setName] = useState("");
   const [studyProgram, setStudyProgram] = useState("");
@@ -122,6 +123,7 @@ export default function TambahKelompokPage() {
             )
           );
           if (projectRows.length > 0) {
+            setSelectedKelasId((current) => (current === "" ? (projectRows[0].kelas?.id ?? "") : current));
             setProjectId((current) => (current === "" ? projectRows[0].id : current));
           }
         }
@@ -153,16 +155,31 @@ export default function TambahKelompokPage() {
     [activeGroupsExcludingEditing]
   );
 
+  // Daftar kelas yang diampu dosen ini, diturunkan dari kelas unik pada
+  // seluruh project miliknya (sudah dimuat lewat loadSupportData) — dosen
+  // memilih Kelas dulu di sini, baru Project difilter sesuai kelas itu.
+  const kelasOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const detail of Object.values(projectDetails)) {
+      if (detail.kelasId && !seen.has(detail.kelasId)) seen.set(detail.kelasId, detail.className);
+    }
+    return Array.from(seen.entries()).map(([value, label]) => ({ value, label }));
+  }, [projectDetails]);
+
+  const projectOptionsForSelectedKelas = useMemo(
+    () => projectOptions.filter((p) => projectDetails[p.value]?.kelasId === selectedKelasId),
+    [projectOptions, projectDetails, selectedKelasId]
+  );
+
   // Saat edit, tampilkan kelas/umkm persis seperti yang tercatat untuk
   // kelompok itu (dari hook); saat buat baru, turunkan dari project yang
   // dipilih di dropdown "Pilih Project". `projectId` state sendiri sudah benar
-  // di kedua mode (handleEditClick men-set-nya ke group.projectId), jadi
-  // kelasId selalu diresolve dari projectDetails.
+  // di kedua mode (handleEditClick men-set-nya ke group.projectId).
   const derivedProjectInfo =
     editingId && editingGroupSnapshot
       ? { className: editingGroupSnapshot.className, umkmName: editingGroupSnapshot.umkmName }
       : (projectDetails[projectId] ?? { className: "", umkmName: "" });
-  const kelasId = projectDetails[projectId]?.kelasId ?? "";
+  const kelasId = editingId && editingGroupSnapshot ? (projectDetails[projectId]?.kelasId ?? "") : selectedKelasId;
 
   // Roster mahasiswa untuk kelas dari project yang dipilih, diambil dari
   // kelas_mahasiswa (relasi yang diatur Admin lewat Data Master) — presisi per
@@ -242,7 +259,7 @@ export default function TambahKelompokPage() {
   const canOpenPicker = kelasId !== "" && isRosterHydrated && kelasRoster.length > 0 && members.length < MAX_MEMBERS;
   const pickerHelperText =
     kelasId === ""
-      ? "Pilih project terlebih dahulu."
+      ? "Pilih kelas dan project terlebih dahulu."
       : !isRosterHydrated
         ? "Memuat data mahasiswa kelas ini..."
         : kelasRoster.length === 0
@@ -269,6 +286,7 @@ export default function TambahKelompokPage() {
   const resetForm = () => {
     setEditingId(null);
     setEditingGroupSnapshot(null);
+    setSelectedKelasId("");
     setProjectId("");
     setName("");
     setStudyProgram("");
@@ -290,6 +308,7 @@ export default function TambahKelompokPage() {
   const handleEditClick = (group: KelompokBimbingan) => {
     setEditingId(group.id);
     setEditingGroupSnapshot(group);
+    setSelectedKelasId(projectDetails[group.projectId]?.kelasId ?? "");
     setProjectId(group.projectId);
     setName(group.name);
     setStudyProgram(group.studyProgram !== "-" ? group.studyProgram : "");
@@ -297,6 +316,12 @@ export default function TambahKelompokPage() {
     setNote(group.catatan);
     setTouched(false);
     setSubmitError(null);
+  };
+
+  const handleKelasChange = (nextKelasId: string) => {
+    setSelectedKelasId(nextKelasId);
+    setProjectId("");
+    setStudyProgram("");
   };
 
   const handleCancel = () => {
@@ -435,12 +460,24 @@ export default function TambahKelompokPage() {
             <div className="flex flex-col gap-5">
               <div className="flex flex-col gap-1.5">
                 <Select
+                  label="Pilih Kelas"
+                  id="kelasId"
+                  options={[{ value: "", label: "Pilih kelas" }, ...kelasOptions]}
+                  value={selectedKelasId}
+                  onChange={(e) => handleKelasChange(e.target.value)}
+                  disabled={editingId !== null}
+                  required
+                />
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <Select
                   label="Pilih Project"
                   id="projectId"
-                  options={[{ value: "", label: "Pilih project" }, ...projectOptions]}
+                  options={[{ value: "", label: "Pilih project" }, ...projectOptionsForSelectedKelas]}
                   value={projectId}
                   onChange={(e) => setProjectId(e.target.value)}
-                  disabled={editingId !== null}
+                  disabled={editingId !== null || selectedKelasId === ""}
                   required
                 />
                 {touched && errors.projectId && <p className="text-xs text-pink">{errors.projectId}</p>}
@@ -458,30 +495,14 @@ export default function TambahKelompokPage() {
                 {touched && errors.name && <p className="text-xs text-pink">{errors.name}</p>}
               </div>
 
-              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-                <div className="flex flex-col gap-1.5">
-                  <Select
-                    label="Filter Program Studi (opsional)"
-                    id="studyProgram"
-                    options={studyProgramOptions}
-                    value={studyProgram}
-                    onChange={(e) => setStudyProgram(e.target.value)}
-                  />
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <Select
-                    label="Kelas"
-                    id="className"
-                    options={
-                      derivedProjectInfo.className
-                        ? [{ value: derivedProjectInfo.className, label: derivedProjectInfo.className }]
-                        : [{ value: "", label: "-" }]
-                    }
-                    value={derivedProjectInfo.className}
-                    onChange={() => {}}
-                    disabled
-                  />
-                </div>
+              <div className="flex flex-col gap-1.5">
+                <Select
+                  label="Filter Program Studi (opsional)"
+                  id="studyProgram"
+                  options={studyProgramOptions}
+                  value={studyProgram}
+                  onChange={(e) => setStudyProgram(e.target.value)}
+                />
               </div>
 
               <div className="flex flex-col gap-1.5">
