@@ -196,6 +196,21 @@ export default function DosenMentoringDetailPage({ params }: { params: Promise<{
       });
       if (error) throw error;
 
+      // Feedback dosen menandakan laporan sudah ditinjau — status berpindah
+      // dari "submitted" ke "reviewed" di sini, bukan menunggu aksi terpisah,
+      // supaya badge/counter di seluruh halaman tidak lagi stuck di
+      // "Menunggu Feedback" setelah dosen benar-benar membalas.
+      if (activeLaporan.status === "submitted") {
+        const { error: statusError } = await supabase
+          .from("laporan_progress")
+          .update({ status: "reviewed" })
+          .eq("id", activeLaporan.id);
+        if (statusError) throw statusError;
+        setLaporanList((prev) =>
+          prev.map((l) => (l.id === activeLaporan.id ? { ...l, status: "reviewed" } : l))
+        );
+      }
+
       await reloadFeedback(activeLaporan.id);
       setContent("");
       setTouched(false);

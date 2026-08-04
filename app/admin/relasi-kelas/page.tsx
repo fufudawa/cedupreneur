@@ -5,9 +5,8 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { PageHeader } from "@/components/shared";
 import { Card, CardHeader, CardTitle, Badge, Button, Select } from "@/components/ui";
-import { useKelas, useUmkmMaster } from "@/lib/useAdminMasterData";
+import { useKelas, useUmkmMaster, useMahasiswaMaster } from "@/lib/useAdminMasterData";
 import { useKelasUmkm } from "@/lib/useKelasUmkm";
-import { useAdminMonitoring } from "@/lib/useAdminMonitoring";
 
 export default function RelasiKelasPage() {
   return (
@@ -21,8 +20,8 @@ function RelasiKelasContent() {
   const { kelasList, isHydrated: kelasHydrated } = useKelas();
   const { umkmMasterList, isHydrated: umkmHydrated } = useUmkmMaster();
   const { links, isHydrated: linksHydrated, addLink, removeLink } = useKelasUmkm();
-  const { groups, isHydrated: groupsHydrated } = useAdminMonitoring();
-  const isHydrated = kelasHydrated && umkmHydrated && linksHydrated && groupsHydrated;
+  const { mahasiswaMasterList, isHydrated: mahasiswaHydrated } = useMahasiswaMaster();
+  const isHydrated = kelasHydrated && umkmHydrated && linksHydrated && mahasiswaHydrated;
 
   const searchParams = useSearchParams();
   const kelasIdParam = searchParams.get("kelasId");
@@ -43,12 +42,10 @@ function RelasiKelasContent() {
 
   const roster = useMemo(() => {
     if (!selectedKelas) return [];
-    const memberMap = new Map<string, { name: string; nim: string }>();
-    groups
-      .filter((g) => g.className === selectedKelas.nama)
-      .forEach((g) => g.members.forEach((m) => memberMap.set(m.id, { name: m.name, nim: m.nim })));
-    return Array.from(memberMap.values());
-  }, [groups, selectedKelas]);
+    return mahasiswaMasterList
+      .filter((m) => m.connectedKelas.some((link) => link.kelasId === selectedKelas.id))
+      .map((m) => ({ name: m.nama, nim: m.nim }));
+  }, [mahasiswaMasterList, selectedKelas]);
 
   if (!isHydrated) {
     return null;
@@ -193,11 +190,11 @@ function RelasiKelasContent() {
               <div>
                 <p className="text-sm font-medium text-navy">Mahasiswa di Kelas Ini</p>
                 <p className="mt-1 text-xs text-muted">
-                  Otomatis dari kelompok bimbingan yang dibuat Dosen untuk kelas ini — bukan diinput manual.
+                  Diatur lewat Data Master &gt; Mahasiswa &gt; Atur Kelas — bukan otomatis dari kelompok bimbingan.
                 </p>
                 {roster.length === 0 ? (
                   <p className="mt-2 rounded-xl bg-soft-gray px-4 py-6 text-center text-sm text-muted">
-                    Belum ada mahasiswa (belum ada kelompok bimbingan untuk kelas ini).
+                    Belum ada mahasiswa yang dihubungkan ke kelas ini. Atur lewat Data Master &gt; Mahasiswa.
                   </p>
                 ) : (
                   <div className="mt-2 flex flex-wrap gap-2">

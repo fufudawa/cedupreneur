@@ -3,22 +3,33 @@
 import { useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Plus } from "lucide-react";
-import { Input } from "@/components/ui";
+import { Input, Select } from "@/components/ui";
 import { supabase } from "@/lib/supabaseClient";
 import { useMahasiswaKelompok } from "@/lib/useMahasiswaKelompok";
+import { useProjectTugas } from "@/lib/useProjectTugas";
 
 export default function UploadProgressPage() {
   const router = useRouter();
   const { activeGroup, isHydrated } = useMahasiswaKelompok();
+  // Upload sekarang wajib menyasar tugas/milestone yang dibuat Dosen — bukan
+  // membuat item Track of Project baru sendiri. Lihat lib/useProjectTugas.ts
+  // (mahasiswa punya akses SELECT via RLS project_tugas_select_mahasiswa,
+  // hook ini hanya dipakai read-only di sini).
+  const { tugasList, isHydrated: tugasHydrated } = useProjectTugas(activeGroup?.projectId || null);
 
   const [isDragging, setIsDragging] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [judul, setJudul] = useState("");
+  const [tugasId, setTugasId] = useState("");
   const [comment, setComment] = useState("");
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [justSubmitted, setJustSubmitted] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Default ke tugas belum-selesai pertama tanpa perlu efek terpisah —
+  // pengguna masih bebas mengganti lewat dropdown (onChange men-set tugasId).
+  const selectedTugasId = tugasId || tugasList.find((t) => !t.isSelesai)?.id || "";
 
   const pickFile = useCallback((fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
@@ -48,6 +59,19 @@ export default function UploadProgressPage() {
     );
   }
 
+  if (tugasHydrated && tugasList.length === 0) {
+    return (
+      <div className="rounded-3xl bg-white p-8 text-center shadow-sm ring-1 ring-slate-100">
+        <p className="text-sm font-semibold text-slate-900">
+          Dosen belum membuat tugas/milestone untuk project ini.
+        </p>
+        <p className="mt-1 text-sm text-slate-400">
+          Upload laporan baru bisa dilakukan setelah Dosen menambahkan Daftar Tugas pada project.
+        </p>
+      </div>
+    );
+  }
+
   async function handleUpload() {
     if (isSubmitting || !activeGroup) return;
 
@@ -55,6 +79,10 @@ export default function UploadProgressPage() {
 
     if (judulTrimmed === "") {
       setError("Judul laporan wajib diisi.");
+      return;
+    }
+    if (selectedTugasId === "") {
+      setError("Pilih tugas/milestone yang ingin dipenuhi.");
       return;
     }
     if (!file) {
@@ -70,6 +98,7 @@ export default function UploadProgressPage() {
         .from("laporan_progress")
         .insert({
           kelompok_id: activeGroup.id,
+          tugas_id: selectedTugasId,
           judul_laporan: judulTrimmed,
           isi_laporan: comment.trim() || null,
           status: "draft",
@@ -124,9 +153,27 @@ export default function UploadProgressPage() {
               }}
             />
           </div>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-slate-700" htmlFor="tugas-id">
+              Tugas / Milestone yang Dipenuhi
+            </label>
+            <Select
+              id="tugas-id"
+              options={tugasList.map((t) => ({
+                value: t.id,
+                label: t.isSelesai ? `${t.judulTugas} (Sudah Selesai)` : t.judulTugas,
+              }))}
+              value={selectedTugasId}
+              onChange={(e) => {
+                setTugasId(e.target.value);
+                setError("");
+              }}
+            />
+          </div>
         </div>
         <p className="mt-3 text-xs text-slate-400">
-          Progress project sekarang otomatis dihitung dari tugas yang ditandai selesai oleh Dosen, bukan diisi manual di sini.
+          Progress project otomatis dihitung dari tugas yang ditandai selesai oleh Dosen. Laporan ini hanya
+          melampirkan bukti/attachment untuk tugas yang Anda pilih di atas.
         </p>
       </div>
 

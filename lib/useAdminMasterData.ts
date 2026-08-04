@@ -244,6 +244,78 @@ export function useUmkmMaster() {
   return { umkmMasterList: items, isHydrated, updateUmkmMaster, refetch };
 }
 
+export interface MahasiswaMaster {
+  id: string;
+  nim: string;
+  nama: string;
+  prodi: string;
+  angkatan: number | null;
+  connectedKelas: { linkId: string; kelasId: string; kelasNama: string }[];
+}
+
+/**
+ * Supabase-backed read for Data Master's Mahasiswa list, including which
+ * kelas each mahasiswa is linked to via kelas_mahasiswa. No add/remove here —
+ * mahasiswa.profile_id is NOT NULL, so creating/deleting a mahasiswa account
+ * is Admin Pengguna's job; this is only for managing kelas assignment.
+ */
+export function useMahasiswaMaster() {
+  const [items, setItems] = useState<MahasiswaMaster[]>([]);
+  const [isHydrated, setIsHydrated] = useState(false);
+
+  const load = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("mahasiswa")
+      .select(
+        "id, nim, prodi, angkatan, profiles ( nama_lengkap ), kelas_mahasiswa ( id, kelas_id, kelas ( nama_kelas ) )"
+      )
+      .order("nim");
+    if (error) throw error;
+
+    type Row = {
+      id: string;
+      nim: string | null;
+      prodi: string | null;
+      angkatan: number | null;
+      profiles: { nama_lengkap: string | null } | null;
+      kelas_mahasiswa: { id: string; kelas_id: string; kelas: { nama_kelas: string | null } | null }[] | null;
+    };
+    return ((data ?? []) as unknown as Row[]).map((m) => ({
+      id: m.id,
+      nim: m.nim ?? "-",
+      nama: m.profiles?.nama_lengkap ?? "-",
+      prodi: m.prodi ?? "-",
+      angkatan: m.angkatan,
+      connectedKelas: (m.kelas_mahasiswa ?? []).map((km) => ({
+        linkId: km.id,
+        kelasId: km.kelas_id,
+        kelasNama: km.kelas?.nama_kelas ?? "-",
+      })),
+    }));
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+    load()
+      .then((mapped) => {
+        if (isMounted) setItems(mapped);
+      })
+      .catch((error) => console.error("Failed to load mahasiswa master", error))
+      .finally(() => {
+        if (isMounted) setIsHydrated(true);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [load]);
+
+  const refetch = useCallback(async () => {
+    setItems(await load());
+  }, [load]);
+
+  return { mahasiswaMasterList: items, isHydrated, refetch };
+}
+
 export interface DosenOption {
   /** dosen.id (the role table's own primary key) — what kelas.dosen_id actually references, NOT profile.id. */
   id: string;

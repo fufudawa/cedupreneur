@@ -11,24 +11,14 @@ import { useNotesStore } from "@/lib/useNotesStore";
 import { supabase } from "@/lib/supabaseClient";
 import { getCurrentProfile } from "@/lib/auth";
 import { useMahasiswaKelompok } from "@/lib/useMahasiswaKelompok";
-
-const REPORT_STATUS_LABEL: Record<string, string> = {
-  draft: "Draft",
-  submitted: "Menunggu Feedback",
-  reviewed: "Selesai Direview",
-};
-
-const REPORT_STATUS_TIMELINE: Record<string, TimelineItem["status"]> = {
-  draft: "belum",
-  submitted: "proses",
-  reviewed: "selesai",
-};
+import { useProjectTugas } from "@/lib/useProjectTugas";
 
 const NOTES_MAX_LENGTH = 500;
 const NOTES_PREVIEW_LIMIT = 3;
 
 interface LaporanRow {
   id: string;
+  tugas_id: string | null;
   judul_laporan: string | null;
   status: string | null;
   created_at: string | null;
@@ -36,12 +26,16 @@ interface LaporanRow {
 
 export default function MahasiswaDashboardPage() {
   const { activeGroup, isHydrated: groupHydrated } = useMahasiswaKelompok();
+  // Track of Project sekarang mengikuti Daftar Tugas yang dibuat Dosen (lihat
+  // lib/useProjectTugas.ts), bukan lagi laporan yang diunggah mahasiswa —
+  // upload hanya melampirkan bukti untuk salah satu tugas ini.
+  const { tugasList, isHydrated: tugasHydrated } = useProjectTugas(activeGroup?.projectId || null);
 
   const [profileId, setProfileId] = useState<string | null>(null);
   const [laporanList, setLaporanList] = useState<LaporanRow[]>([]);
   const [feedbackCount, setFeedbackCount] = useState(0);
   const [dataHydrated, setDataHydrated] = useState(false);
-  const isHydrated = groupHydrated && dataHydrated;
+  const isHydrated = groupHydrated && tugasHydrated && dataHydrated;
 
   useEffect(() => {
     let isMounted = true;
@@ -66,7 +60,7 @@ export default function MahasiswaDashboardPage() {
       try {
         const { data, error } = await supabase
           .from("laporan_progress")
-          .select("id, judul_laporan, status, created_at, feedback ( id )")
+          .select("id, tugas_id, judul_laporan, status, created_at, feedback ( id )")
           .eq("kelompok_id", activeGroup.id)
           .order("created_at", { ascending: false });
         if (error) throw error;
@@ -75,7 +69,15 @@ export default function MahasiswaDashboardPage() {
         const rows = (data ?? []) as unknown as Row[];
 
         if (isMounted) {
-          setLaporanList(rows.map(({ id, judul_laporan, status, created_at }) => ({ id, judul_laporan, status, created_at })));
+          setLaporanList(
+            rows.map(({ id, tugas_id, judul_laporan, status, created_at }) => ({
+              id,
+              tugas_id,
+              judul_laporan,
+              status,
+              created_at,
+            }))
+          );
           setFeedbackCount(rows.reduce((sum, row) => sum + (row.feedback?.length ?? 0), 0));
         }
       } catch (error) {
@@ -157,12 +159,24 @@ export default function MahasiswaDashboardPage() {
 
   const reviewedCount = laporanList.filter((r) => r.status === "reviewed").length;
 
-  const trackOfProject: TimelineItem[] = laporanList.slice(0, 5).map((report) => ({
-    id: report.id,
-    title: report.judul_laporan ?? "Laporan Progress",
-    description: REPORT_STATUS_LABEL[report.status ?? "draft"],
-    status: REPORT_STATUS_TIMELINE[report.status ?? "draft"] ?? "belum",
-  }));
+  // Setiap item timeline = satu tugas/milestone buatan Dosen, bukan satu
+  // laporan upload — status: "selesai" kalau Dosen sudah menandai tugasnya
+  // selesai, "proses" kalau sudah ada laporan yang menyasar tugas itu (masih
+  // menunggu Dosen), atau "belum" kalau belum ada laporan sama sekali.
+  const trackOfProject: TimelineItem[] = tugasList.map((tugas) => {
+    const laporanForTugas = laporanList.filter((l) => l.tugas_id === tugas.id);
+    const status: TimelineItem["status"] = tugas.isSelesai
+      ? "selesai"
+      : laporanForTugas.length > 0
+        ? "proses"
+        : "belum";
+    const description = tugas.isSelesai
+      ? "Ditandai selesai oleh Dosen"
+      : laporanForTugas.length > 0
+        ? `${laporanForTugas.length} laporan terkirim · menunggu Dosen`
+        : "Belum ada laporan terkirim";
+    return { id: tugas.id, title: tugas.judulTugas, description, status };
+  });
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(260px,320px)]">
@@ -196,16 +210,16 @@ export default function MahasiswaDashboardPage() {
             <CardTitle className="text-lg">Track of project</CardTitle>
           </CardHeader>
           <div className="mt-4">
-            {!activeGroup.projectFileUrl ? (
+            {!activeGroup.projectId ? (
               <div className="flex flex-col items-center justify-center gap-1 py-10 text-center">
                 <p className="text-sm font-semibold text-navy">Project belum tersedia</p>
-                <p className="text-xs text-muted">Menunggu Dosen mengunggah materi project.</p>
+                <p className="text-xs text-muted">Menunggu Dosen membuat project untuk kelompok Anda.</p>
               </div>
             ) : (
               <>
                 {trackOfProject.length === 0 ? (
                   <p className="py-6 text-center text-sm text-muted">
-                    Belum ada laporan progress yang dapat dipantau.
+                    Dosen belum membuat tugas/milestone untuk project ini.
                   </p>
                 ) : (
                   <Timeline items={trackOfProject} />

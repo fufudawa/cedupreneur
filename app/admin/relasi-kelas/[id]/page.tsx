@@ -6,7 +6,7 @@ import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { PageHeader } from "@/components/shared";
 import { Card, CardHeader, CardTitle, Badge, Button } from "@/components/ui";
-import { useKelas, useUmkmMaster } from "@/lib/useAdminMasterData";
+import { useKelas, useUmkmMaster, useMahasiswaMaster } from "@/lib/useAdminMasterData";
 import { useKelasUmkm } from "@/lib/useKelasUmkm";
 import { useAdminMonitoring } from "@/lib/useAdminMonitoring";
 
@@ -15,8 +15,9 @@ export default function RelasiKelasDetailPage({ params }: { params: Promise<{ id
   const { kelasList, isHydrated: kelasHydrated } = useKelas();
   const { umkmMasterList, isHydrated: umkmHydrated } = useUmkmMaster();
   const { links, isHydrated: linksHydrated } = useKelasUmkm();
+  const { mahasiswaMasterList, isHydrated: mahasiswaHydrated } = useMahasiswaMaster();
   const { groups, isHydrated: groupsHydrated } = useAdminMonitoring();
-  const isHydrated = kelasHydrated && umkmHydrated && linksHydrated && groupsHydrated;
+  const isHydrated = kelasHydrated && umkmHydrated && linksHydrated && mahasiswaHydrated && groupsHydrated;
 
   if (!isHydrated) {
     return null;
@@ -29,8 +30,7 @@ export default function RelasiKelasDetailPage({ params }: { params: Promise<{ id
 
   const linkedUmkm = links.filter((l) => l.kelasId === kelas.id).map((l) => umkmMasterList.find((u) => u.id === l.umkmId)).filter((u): u is NonNullable<typeof u> => !!u);
   const relatedGroups = groups.filter((g) => g.className === kelas.nama);
-  const roster = new Map<string, { name: string; nim: string }>();
-  relatedGroups.forEach((g) => g.members.forEach((m) => roster.set(m.id, { name: m.name, nim: m.nim })));
+  const roster = mahasiswaMasterList.filter((m) => m.connectedKelas.some((link) => link.kelasId === kelas.id));
 
   return (
     <div>
@@ -73,7 +73,7 @@ export default function RelasiKelasDetailPage({ params }: { params: Promise<{ id
           </div>
           <div>
             <p className="text-xs text-muted">Jumlah Mahasiswa</p>
-            <p className="mt-1 text-sm font-semibold text-navy">{roster.size} mahasiswa</p>
+            <p className="mt-1 text-sm font-semibold text-navy">{roster.length} mahasiswa</p>
           </div>
         </div>
       </Card>
@@ -109,13 +109,13 @@ export default function RelasiKelasDetailPage({ params }: { params: Promise<{ id
         <CardHeader>
           <CardTitle className="text-lg">Daftar Mahasiswa</CardTitle>
         </CardHeader>
-        {roster.size === 0 ? (
+        {roster.length === 0 ? (
           <p className="text-sm text-muted">Belum ada mahasiswa pada kelas ini.</p>
         ) : (
           <div className="flex flex-wrap gap-2">
-            {Array.from(roster.values()).map((m) => (
-              <Badge key={m.nim} variant="gray">
-                {m.name} ({m.nim})
+            {roster.map((m) => (
+              <Badge key={m.id} variant="gray">
+                {m.nama} ({m.nim})
               </Badge>
             ))}
           </div>

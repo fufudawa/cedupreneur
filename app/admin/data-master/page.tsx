@@ -2,11 +2,12 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { BookOpen, GraduationCap, Store } from "lucide-react";
+import { BookOpen, GraduationCap, Store, Users } from "lucide-react";
 import { PageHeader, StatCard, Modal } from "@/components/shared";
 import { Card, CardHeader, CardTitle, Badge, Button, Input, Select, Textarea, ActionMenu } from "@/components/ui";
 import { BUSINESS_SECTOR_OPTIONS, type MataKuliah, type Kelas, type UmkmMaster } from "@/lib/adminMasterData";
-import { useKelas, useMataKuliah, useUmkmMaster, useDosenOptions } from "@/lib/useAdminMasterData";
+import { useKelas, useMataKuliah, useUmkmMaster, useDosenOptions, useMahasiswaMaster } from "@/lib/useAdminMasterData";
+import { useKelasMahasiswa } from "@/lib/useKelasMahasiswa";
 
 type ConfirmAction =
   | { entity: "mk"; id: string }
@@ -19,13 +20,16 @@ export default function DataMasterPage() {
   const { kelasList, isHydrated: kelasHydrated, updateKelas, removeKelas } = useKelas();
   const { umkmMasterList, isHydrated: umkmHydrated, updateUmkmMaster } = useUmkmMaster();
   const { dosenOptions, isHydrated: dosenHydrated } = useDosenOptions();
-  const isHydrated = mkHydrated && kelasHydrated && umkmHydrated && dosenHydrated;
+  const { mahasiswaMasterList, isHydrated: mahasiswaHydrated, refetch: refetchMahasiswa } = useMahasiswaMaster();
+  const { addLink: addKelasMahasiswaLink, removeLink: removeKelasMahasiswaLink } = useKelasMahasiswa();
+  const isHydrated = mkHydrated && kelasHydrated && umkmHydrated && dosenHydrated && mahasiswaHydrated;
 
   const [mkSearch, setMkSearch] = useState("");
   const [kelasSearch, setKelasSearch] = useState("");
   const [kelasDosenFilter, setKelasDosenFilter] = useState("all");
   const [umkmSearch, setUmkmSearch] = useState("");
   const [umkmSectorFilter, setUmkmSectorFilter] = useState("all");
+  const [mahasiswaSearch, setMahasiswaSearch] = useState("");
 
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
   const [confirmError, setConfirmError] = useState("");
@@ -33,6 +37,11 @@ export default function DataMasterPage() {
   const [editKelas, setEditKelas] = useState<Kelas | null>(null);
   const [editUmkm, setEditUmkm] = useState<UmkmMaster | null>(null);
   const [saveError, setSaveError] = useState("");
+
+  const [editMahasiswaId, setEditMahasiswaId] = useState<string | null>(null);
+  const [kelasToAdd, setKelasToAdd] = useState("");
+  const [mahasiswaKelasError, setMahasiswaKelasError] = useState("");
+  const editMahasiswa = mahasiswaMasterList.find((m) => m.id === editMahasiswaId) ?? null;
 
   const filteredMataKuliah = useMemo(() => {
     const keyword = mkSearch.toLowerCase();
@@ -59,8 +68,43 @@ export default function DataMasterPage() {
     });
   }, [umkmMasterList, umkmSearch, umkmSectorFilter]);
 
+  const filteredMahasiswa = useMemo(() => {
+    const keyword = mahasiswaSearch.toLowerCase();
+    return mahasiswaMasterList.filter(
+      (m) =>
+        keyword === "" ||
+        m.nim.toLowerCase().includes(keyword) ||
+        m.nama.toLowerCase().includes(keyword) ||
+        m.prodi.toLowerCase().includes(keyword)
+    );
+  }, [mahasiswaMasterList, mahasiswaSearch]);
+
   if (!isHydrated) {
     return null;
+  }
+
+  async function handleAddKelasMahasiswa() {
+    if (!editMahasiswa || kelasToAdd === "") return;
+    setMahasiswaKelasError("");
+    try {
+      await addKelasMahasiswaLink(kelasToAdd, editMahasiswa.id);
+      setKelasToAdd("");
+      await refetchMahasiswa();
+    } catch (error) {
+      console.error("Failed to link mahasiswa to kelas", error);
+      setMahasiswaKelasError("Gagal menghubungkan mahasiswa ke kelas. Silakan coba lagi.");
+    }
+  }
+
+  async function handleRemoveKelasMahasiswa(linkId: string) {
+    setMahasiswaKelasError("");
+    try {
+      await removeKelasMahasiswaLink(linkId);
+      await refetchMahasiswa();
+    } catch (error) {
+      console.error("Failed to unlink mahasiswa from kelas", error);
+      setMahasiswaKelasError("Gagal memutus relasi kelas. Silakan coba lagi.");
+    }
   }
 
   async function handleConfirmDelete() {
@@ -86,10 +130,10 @@ export default function DataMasterPage() {
     <div>
       <PageHeader
         title="Data Master"
-        description="Kelola mata kuliah, kelas, dan UMKM mitra yang digunakan dalam sistem."
+        description="Kelola mata kuliah, kelas, UMKM mitra, dan relasi kelas mahasiswa yang digunakan dalam sistem."
       />
 
-      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Total Mata Kuliah"
           value={mataKuliah.length}
@@ -110,6 +154,13 @@ export default function DataMasterPage() {
           icon={<Store size={22} strokeWidth={2} />}
           iconClassName="bg-pink/10 text-pink"
           accentClassName="bg-pink"
+        />
+        <StatCard
+          label="Total Mahasiswa"
+          value={mahasiswaMasterList.length}
+          icon={<Users size={22} strokeWidth={2} />}
+          iconClassName="bg-navy/10 text-navy"
+          accentClassName="bg-navy"
         />
       </div>
 
@@ -350,6 +401,80 @@ export default function DataMasterPage() {
         )}
       </Card>
 
+      <Card className="mt-6 min-w-0 rounded-2xl p-6">
+        <CardHeader className="flex-wrap gap-3">
+          <div>
+            <CardTitle className="text-lg">Mahasiswa</CardTitle>
+            <p className="mt-0.5 text-xs text-muted">{mahasiswaMasterList.length} mahasiswa</p>
+          </div>
+          <Link href="/admin/pengguna/tambah">
+            <Button variant="secondary" size="sm">
+              + Tambah Mahasiswa (Menu Pengguna)
+            </Button>
+          </Link>
+        </CardHeader>
+        <p className="-mt-2 mb-4 text-xs text-muted">
+          Mahasiswa selalu memiliki akun login, jadi dibuat/dihapus dari menu Pengguna. Di sini Anda menghubungkan
+          mahasiswa ke kelas spesifik — relasi ini yang dipakai Dosen saat memilih anggota kelompok.
+        </p>
+
+        <div className="mb-4">
+          <Input
+            id="search-mahasiswa"
+            placeholder="Cari NIM/nama/prodi..."
+            value={mahasiswaSearch}
+            onChange={(e) => setMahasiswaSearch(e.target.value)}
+          />
+        </div>
+
+        {filteredMahasiswa.length === 0 ? (
+          <p className="py-8 text-center text-sm text-muted">Belum ada data mahasiswa.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[680px] text-left text-sm">
+              <thead className="bg-purple/5">
+                <tr>
+                  <th className="rounded-l-xl px-3 py-2.5 font-medium text-navy">NIM</th>
+                  <th className="px-3 py-2.5 font-medium text-navy">Nama</th>
+                  <th className="px-3 py-2.5 font-medium text-navy">Prodi</th>
+                  <th className="px-3 py-2.5 font-medium text-navy">Kelas Terhubung</th>
+                  <th className="rounded-r-xl px-3 py-2.5 font-medium text-navy">Aksi</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-soft-gray-dark">
+                {filteredMahasiswa.map((item) => (
+                  <tr key={item.id}>
+                    <td className="px-3 py-3 font-medium text-navy">{item.nim}</td>
+                    <td className="px-3 py-3 text-navy">{item.nama}</td>
+                    <td className="px-3 py-3 text-muted">{item.prodi}</td>
+                    <td className="px-3 py-3">
+                      {item.connectedKelas.length === 0 ? (
+                        <Badge variant="gray">Belum Terhubung</Badge>
+                      ) : (
+                        <span className="text-muted">{item.connectedKelas.map((k) => k.kelasNama).join(", ")}</span>
+                      )}
+                    </td>
+                    <td className="w-[110px] px-3 py-3">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setMahasiswaKelasError("");
+                          setKelasToAdd("");
+                          setEditMahasiswaId(item.id);
+                        }}
+                      >
+                        Atur Kelas
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
       {/* Mata Kuliah edit modal */}
       <Modal open={!!editMk} onClose={() => setEditMk(null)} title="Edit Mata Kuliah">
         {editMk && (
@@ -522,6 +647,71 @@ export default function DataMasterPage() {
               </Button>
             </div>
           </form>
+        )}
+      </Modal>
+
+      {/* Mahasiswa - atur kelas modal */}
+      <Modal
+        open={!!editMahasiswa}
+        onClose={() => setEditMahasiswaId(null)}
+        title={editMahasiswa ? `Atur Kelas — ${editMahasiswa.nama}` : "Atur Kelas"}
+      >
+        {editMahasiswa && (
+          <div className="flex flex-col gap-4">
+            <div>
+              <p className="text-sm font-medium text-navy">Kelas Terhubung</p>
+              {editMahasiswa.connectedKelas.length === 0 ? (
+                <p className="mt-2 rounded-xl bg-soft-gray px-4 py-6 text-center text-sm text-muted">
+                  Mahasiswa ini belum terhubung ke kelas manapun.
+                </p>
+              ) : (
+                <div className="mt-2 flex flex-col gap-2">
+                  {editMahasiswa.connectedKelas.map((link) => (
+                    <div
+                      key={link.linkId}
+                      className="flex items-center justify-between rounded-xl border border-soft-gray-dark px-4 py-2.5"
+                    >
+                      <p className="text-sm font-medium text-navy">{link.kelasNama}</p>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleRemoveKelasMahasiswa(link.linkId)}
+                      >
+                        Putus Relasi
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Select
+                id="tambah-kelas-mahasiswa"
+                options={[
+                  { value: "", label: "Pilih kelas untuk ditambahkan..." },
+                  ...kelasList
+                    .filter((k) => !editMahasiswa.connectedKelas.some((link) => link.kelasId === k.id))
+                    .map((k) => ({ value: k.id, label: `${k.nama} — ${k.mataKuliahNama}` })),
+                ]}
+                value={kelasToAdd}
+                onChange={(e) => setKelasToAdd(e.target.value)}
+                className="flex-1"
+              />
+              <Button type="button" variant="secondary" disabled={kelasToAdd === ""} onClick={handleAddKelasMahasiswa}>
+                + Hubungkan
+              </Button>
+            </div>
+
+            {mahasiswaKelasError && <p className="text-xs text-red-500">{mahasiswaKelasError}</p>}
+
+            <div className="flex justify-end">
+              <Button type="button" variant="outline" onClick={() => setEditMahasiswaId(null)}>
+                Tutup
+              </Button>
+            </div>
+          </div>
         )}
       </Modal>
 

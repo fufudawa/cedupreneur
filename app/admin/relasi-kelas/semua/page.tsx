@@ -6,9 +6,8 @@ import { useRouter } from "next/navigation";
 import { ArrowLeft, Layers, Store, Users } from "lucide-react";
 import { PageHeader, StatCard } from "@/components/shared";
 import { Card, Button, Input, Select, ActionMenu } from "@/components/ui";
-import { useKelas, useUmkmMaster } from "@/lib/useAdminMasterData";
+import { useKelas, useUmkmMaster, useMahasiswaMaster } from "@/lib/useAdminMasterData";
 import { useKelasUmkm } from "@/lib/useKelasUmkm";
-import { useAdminMonitoring } from "@/lib/useAdminMonitoring";
 
 const PAGE_SIZE = 10;
 
@@ -17,8 +16,8 @@ export default function SeluruhRelasiKelasPage() {
   const { kelasList, isHydrated: kelasHydrated } = useKelas();
   const { umkmMasterList, isHydrated: umkmHydrated } = useUmkmMaster();
   const { links, isHydrated: linksHydrated } = useKelasUmkm();
-  const { groups, isHydrated: groupsHydrated } = useAdminMonitoring();
-  const isHydrated = kelasHydrated && umkmHydrated && linksHydrated && groupsHydrated;
+  const { mahasiswaMasterList, isHydrated: mahasiswaHydrated } = useMahasiswaMaster();
+  const isHydrated = kelasHydrated && umkmHydrated && linksHydrated && mahasiswaHydrated;
 
   const [search, setSearch] = useState("");
   const [tahunFilter, setTahunFilter] = useState("all");
@@ -33,12 +32,12 @@ export default function SeluruhRelasiKelasPage() {
           .filter((l) => l.kelasId === kelas.id)
           .map((l) => umkmMasterList.find((u) => u.id === l.umkmId)?.namaUsaha)
           .filter((n): n is string => !!n);
-        const rosterCount = new Set(
-          groups.filter((g) => g.className === kelas.nama).flatMap((g) => g.members.map((m) => m.id))
-        ).size;
+        const rosterCount = mahasiswaMasterList.filter((m) =>
+          m.connectedKelas.some((link) => link.kelasId === kelas.id)
+        ).length;
         return { kelas, linkedUmkmNames, rosterCount };
       }),
-    [kelasList, links, umkmMasterList, groups]
+    [kelasList, links, umkmMasterList, mahasiswaMasterList]
   );
 
   const tahunOptions = Array.from(new Set(kelasList.map((k) => k.tahunAjaran)));
@@ -60,7 +59,7 @@ export default function SeluruhRelasiKelasPage() {
 
   const totalKelas = kelasList.length;
   const umkmTerhubung = new Set(links.map((l) => l.umkmId)).size;
-  const totalMahasiswaTerhubung = new Set(groups.flatMap((g) => g.members.map((m) => m.id))).size;
+  const totalMahasiswaTerhubung = mahasiswaMasterList.filter((m) => m.connectedKelas.length > 0).length;
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);

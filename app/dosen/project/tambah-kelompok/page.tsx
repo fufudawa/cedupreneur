@@ -30,18 +30,21 @@ export default function TambahKelompokPage() {
   const router = useRouter();
   const { groups, isHydrated, refetch } = useDosenKelompokBimbingan();
 
-  // Data pendukung form (prodi + nama mahasiswa nyata, daftar kelas nyata,
-  // daftar UMKM nyata) — diambil sekali dari Supabase, menggantikan
-  // STUDENTS/STUDY_PROGRAMS/CLASSES_BY_STUDY_PROGRAM/UMKM_OPTIONS dummy.
-  const [studentOptions, setStudentOptions] = useState<StudentOption[]>([]);
   const [studyProgramOptions, setStudyProgramOptions] = useState<SelectOption[]>([]);
   const [projectOptions, setProjectOptions] = useState<SelectOption[]>([]);
   // Kelas & UMKM Mitra bukan lagi dropdown manual — keduanya diturunkan
   // otomatis dari project yang dipilih (project.kelas_id / project.umkm_id),
   // supaya nilai yang tampil di form selalu konsisten dengan data yang benar-
   // benar tersimpan (kelompok sendiri tidak punya kolom kelas/umkm).
-  const [projectDetails, setProjectDetails] = useState<Record<string, { className: string; umkmName: string }>>({});
+  const [projectDetails, setProjectDetails] = useState<Record<string, { className: string; kelasId: string; umkmName: string }>>({});
   const [supportDataHydrated, setSupportDataHydrated] = useState(false);
+
+  // Roster mahasiswa untuk kelas dari project yang sedang dipilih — diambil
+  // dari relasi kelas_mahasiswa (diatur Admin lewat Data Master), bukan dari
+  // seluruh tabel mahasiswa. Ini yang membuat daftar di modal "Tambah Anggota"
+  // presisi sesuai kelas, bukan cuma tebakan lewat teks prodi.
+  const [kelasRoster, setKelasRoster] = useState<StudentOption[]>([]);
+  const [isRosterHydrated, setIsRosterHydrated] = useState(true);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingGroupSnapshot, setEditingGroupSnapshot] = useState<KelompokBimbingan | null>(null);
@@ -85,50 +88,6 @@ export default function TambahKelompokPage() {
         console.error("Failed to resolve dosen identity for kelompok form", error);
       }
 
-      // Setiap query dijalankan & ditangani independen (bukan satu Promise.all
-      // bersama) supaya SATU tabel yang gagal (mis. diblokir RLS) tidak ikut
-      // mengosongkan dropdown lain yang sebenarnya berhasil.
-
-      try {
-        type MahasiswaRow = {
-          id: string;
-          nim: string | null;
-          prodi: string | null;
-          profiles: { nama_lengkap: string | null } | null;
-        };
-        const { data, error } = await supabase
-          .from("mahasiswa")
-          .select("id, nim, prodi, profiles ( nama_lengkap )");
-        if (error) throw error;
-
-        const mahasiswaRows = (data ?? []) as unknown as MahasiswaRow[];
-        const students: StudentOption[] = mahasiswaRows.map((row) => ({
-          id: row.id,
-          nim: row.nim ?? "-",
-          name: row.profiles?.nama_lengkap ?? "-",
-          studyProgram: row.prodi ?? "",
-          // Tidak ada tabel kelas_mahasiswa di skema — mahasiswa tidak terhubung
-          // ke satu kelas tertentu, jadi field ini dikosongkan (lihat catatan
-          // filter kelas di bawah availableStudentsForPicker).
-          className: "",
-        }));
-
-        const uniqueProdi = Array.from(new Set(students.map((s) => s.studyProgram).filter(Boolean)));
-        if (isMounted) {
-          setStudentOptions(students);
-          setStudyProgramOptions([
-            { value: "", label: "Pilih program studi" },
-            ...uniqueProdi.map((p) => ({ value: p, label: p })),
-          ]);
-        }
-      } catch (error) {
-        console.error("Failed to load mahasiswa for kelompok form (cek RLS SELECT pada tabel mahasiswa):", error);
-        if (isMounted) {
-          setStudentOptions([]);
-          setStudyProgramOptions([{ value: "", label: "Pilih program studi" }]);
-        }
-      }
-
       try {
         // Kelas & UMKM Mitra tidak lagi dipilih manual — keduanya diambil
         // langsung dari relasi project.kelas / project.umkm supaya nilai yang
@@ -136,12 +95,12 @@ export default function TambahKelompokPage() {
         type ProjectRow = {
           id: string;
           judul_project: string | null;
-          kelas: { nama_kelas: string | null } | null;
+          kelas: { id: string; nama_kelas: string | null } | null;
           umkm: { nama_usaha: string | null } | null;
         };
         let query = supabase
           .from("project")
-          .select("id, judul_project, kelas ( nama_kelas ), umkm ( nama_usaha )")
+          .select("id, judul_project, kelas ( id, nama_kelas ), umkm ( nama_usaha )")
           .order("created_at", { ascending: false });
         if (dosenId) query = query.eq("created_by", dosenId);
         const { data, error } = await query;
@@ -154,7 +113,11 @@ export default function TambahKelompokPage() {
             Object.fromEntries(
               projectRows.map((p) => [
                 p.id,
-                { className: p.kelas?.nama_kelas ?? "-", umkmName: p.umkm?.nama_usaha ?? "-" },
+                {
+                  className: p.kelas?.nama_kelas ?? "-",
+                  kelasId: p.kelas?.id ?? "",
+                  umkmName: p.umkm?.nama_usaha ?? "-",
+                },
               ])
             )
           );
@@ -190,29 +153,103 @@ export default function TambahKelompokPage() {
     [activeGroupsExcludingEditing]
   );
 
-  // Tidak ada tabel kelas_mahasiswa nyata untuk menghubungkan mahasiswa ke
-  // satu kelas tertentu, jadi pemilihan "Kelas" tidak dipakai untuk memfilter
-  // (mengikuti pola dropdown inert yang sama seperti "Tahap" di halaman lain)
-  // — hanya program studi (kolom nyata mahasiswa.prodi) yang benar-benar memfilter.
-  const availableStudentsForPicker = studentOptions.filter(
-    (student) => student.studyProgram === studyProgram && !members.some((m) => m.id === student.id)
-  );
-
   // Saat edit, tampilkan kelas/umkm persis seperti yang tercatat untuk
   // kelompok itu (dari hook); saat buat baru, turunkan dari project yang
-  // dipilih di dropdown "Pilih Project".
+  // dipilih di dropdown "Pilih Project". `projectId` state sendiri sudah benar
+  // di kedua mode (handleEditClick men-set-nya ke group.projectId), jadi
+  // kelasId selalu diresolve dari projectDetails.
   const derivedProjectInfo =
     editingId && editingGroupSnapshot
       ? { className: editingGroupSnapshot.className, umkmName: editingGroupSnapshot.umkmName }
       : (projectDetails[projectId] ?? { className: "", umkmName: "" });
+  const kelasId = projectDetails[projectId]?.kelasId ?? "";
 
-  const canOpenPicker = studyProgram !== "" && derivedProjectInfo.className !== "" && members.length < MAX_MEMBERS;
+  // Roster mahasiswa untuk kelas dari project yang dipilih, diambil dari
+  // kelas_mahasiswa (relasi yang diatur Admin lewat Data Master) — presisi per
+  // kelas, bukan lagi menebak lewat kecocokan teks prodi di seluruh mahasiswa.
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadRoster() {
+      if (kelasId === "") {
+        if (isMounted) {
+          setKelasRoster([]);
+          setStudyProgramOptions([{ value: "", label: "Semua program studi" }]);
+          setIsRosterHydrated(true);
+        }
+        return;
+      }
+
+      setIsRosterHydrated(false);
+      try {
+        type RosterRow = {
+          mahasiswa: {
+            id: string;
+            nim: string | null;
+            prodi: string | null;
+            profiles: { nama_lengkap: string | null } | null;
+          } | null;
+        };
+        const { data, error } = await supabase
+          .from("kelas_mahasiswa")
+          .select("mahasiswa ( id, nim, prodi, profiles ( nama_lengkap ) )")
+          .eq("kelas_id", kelasId);
+        if (error) throw error;
+
+        const rows = (data ?? []) as unknown as RosterRow[];
+        const students: StudentOption[] = rows
+          .map((row) => row.mahasiswa)
+          .filter((m): m is NonNullable<RosterRow["mahasiswa"]> => !!m)
+          .map((m) => ({
+            id: m.id,
+            nim: m.nim ?? "-",
+            name: m.profiles?.nama_lengkap ?? "-",
+            studyProgram: m.prodi ?? "",
+            className: "",
+          }));
+
+        if (isMounted) {
+          setKelasRoster(students);
+          const uniqueProdi = Array.from(new Set(students.map((s) => s.studyProgram).filter(Boolean)));
+          setStudyProgramOptions([
+            { value: "", label: "Semua program studi" },
+            ...uniqueProdi.map((p) => ({ value: p, label: p })),
+          ]);
+        }
+      } catch (error) {
+        console.error("Failed to load kelas roster (cek RLS SELECT pada tabel kelas_mahasiswa):", error);
+        if (isMounted) {
+          setKelasRoster([]);
+          setStudyProgramOptions([{ value: "", label: "Semua program studi" }]);
+        }
+      } finally {
+        if (isMounted) setIsRosterHydrated(true);
+      }
+    }
+
+    loadRoster();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [kelasId]);
+
+  const availableStudentsForPicker = kelasRoster.filter(
+    (student) =>
+      (studyProgram === "" || student.studyProgram === studyProgram) && !members.some((m) => m.id === student.id)
+  );
+
+  const canOpenPicker = kelasId !== "" && isRosterHydrated && kelasRoster.length > 0 && members.length < MAX_MEMBERS;
   const pickerHelperText =
-    studyProgram === "" || derivedProjectInfo.className === ""
-      ? "Pilih program studi dan project terlebih dahulu."
-      : members.length >= MAX_MEMBERS
-        ? "Sudah mencapai maksimal 5 anggota."
-        : null;
+    kelasId === ""
+      ? "Pilih project terlebih dahulu."
+      : !isRosterHydrated
+        ? "Memuat data mahasiswa kelas ini..."
+        : kelasRoster.length === 0
+          ? "Kelas ini belum memiliki mahasiswa terdaftar. Hubungi admin untuk menghubungkan mahasiswa lewat Data Master."
+          : members.length >= MAX_MEMBERS
+            ? "Sudah mencapai maksimal 5 anggota."
+            : null;
 
   const errors = {
     projectId: projectId === "" ? "Project wajib dipilih." : null,
@@ -220,7 +257,6 @@ export default function TambahKelompokPage() {
       name.trim().length < NAME_MIN_LENGTH || name.trim().length > NAME_MAX_LENGTH
         ? "Nama kelompok wajib diisi."
         : null,
-    studyProgram: studyProgram === "" ? "Program studi wajib dipilih." : null,
     members:
       members.length < MIN_MEMBERS
         ? "Minimal 2 mahasiswa dalam satu kelompok."
@@ -425,16 +461,12 @@ export default function TambahKelompokPage() {
               <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
                 <div className="flex flex-col gap-1.5">
                   <Select
-                    label="Pilih Program Studi"
+                    label="Filter Program Studi (opsional)"
                     id="studyProgram"
                     options={studyProgramOptions}
                     value={studyProgram}
                     onChange={(e) => setStudyProgram(e.target.value)}
-                    required
                   />
-                  {touched && errors.studyProgram && (
-                    <p className="text-xs text-pink">{errors.studyProgram}</p>
-                  )}
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <Select

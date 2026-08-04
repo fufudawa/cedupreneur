@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { PageHeader, FileUploadBox } from "@/components/shared";
-import { Card, Input, Textarea, Button } from "@/components/ui";
+import { Card, Input, Textarea, Select, Button } from "@/components/ui";
 import { supabase } from "@/lib/supabaseClient";
 import { getCurrentProfile } from "@/lib/auth";
 
@@ -21,51 +21,29 @@ function todayIsoDate() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
 
-/**
- * `project` requires kelas_id + umkm_id (NOT NULL FKs) but the form only
- * collects title/description/deadline/file — so these are resolved
- * automatically from the logged-in dosen's own kelas (kelas.dosen_id) and
- * that kelas's linked UMKM mitra (kelas_umkm). Ambiguous (0 or >1 matches)
- * cases surface as an inline error instead of guessing.
- */
-async function resolveKelasAndUmkm(
-  dosenId: string
-): Promise<{ ok: true; kelasId: string; umkmId: string } | { ok: false; message: string }> {
-  const { data: kelasRows, error: kelasError } = await supabase.from("kelas").select("id").eq("dosen_id", dosenId);
-  if (kelasError) throw kelasError;
+interface SelectOption {
+  value: string;
+  label: string;
+}
 
-  if (!kelasRows || kelasRows.length === 0) {
-    return { ok: false, message: "Anda belum memiliki kelas yang terdaftar. Hubungi admin untuk menambahkan kelas." };
-  }
-  if (kelasRows.length > 1) {
-    return {
-      ok: false,
-      message: "Anda memiliki lebih dari satu kelas. Tidak dapat menentukan kelas secara otomatis.",
-    };
-  }
-  const kelasId = kelasRows[0].id as string;
-
-  const { data: kelasUmkmRows, error: kelasUmkmError } = await supabase
-    .from("kelas_umkm")
-    .select("umkm_id")
-    .eq("kelas_id", kelasId);
-  if (kelasUmkmError) throw kelasUmkmError;
-
-  if (!kelasUmkmRows || kelasUmkmRows.length === 0) {
-    return { ok: false, message: "Kelas Anda belum terhubung dengan UMKM mitra. Hubungi admin." };
-  }
-  if (kelasUmkmRows.length > 1) {
-    return {
-      ok: false,
-      message: "Kelas Anda terhubung dengan lebih dari satu UMKM. Tidak dapat menentukan UMKM secara otomatis.",
-    };
-  }
-
-  return { ok: true, kelasId, umkmId: kelasUmkmRows[0].umkm_id as string };
+interface KelasRow {
+  id: string;
+  nama_kelas: string | null;
+  semester: string | null;
+  tahun_ajaran: string | null;
+  mata_kuliah: { nama_mk: string | null } | null;
 }
 
 export default function TambahProjectPage() {
   const router = useRouter();
+
+  const [dosenId, setDosenId] = useState<string | null>(null);
+  const [kelasOptions, setKelasOptions] = useState<SelectOption[]>([]);
+  const [selectedKelasId, setSelectedKelasId] = useState("");
+  const [umkmOptions, setUmkmOptions] = useState<SelectOption[]>([]);
+  const [selectedUmkmId, setSelectedUmkmId] = useState("");
+  const [isLoadingOptions, setIsLoadingOptions] = useState(true);
+  const [optionsError, setOptionsError] = useState<string | null>(null);
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -78,7 +56,109 @@ export default function TambahProjectPage() {
 
   const today = todayIsoDate();
 
+  // Dosen bisa mengampu lebih dari satu kelas (mis. beberapa kelas paralel
+  // seperti RJ24D/RJ24E), jadi kelas & UMKM mitra dipilih manual lewat
+  // dropdown, bukan ditebak otomatis — sebelumnya form ini menolak submit
+  // sama sekali kalau dosen punya >1 kelas.
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadKelasOptions() {
+      try {
+        const profile = await getCurrentProfile();
+        const { data: dosenRow, error: dosenError } = await supabase
+          .from("dosen")
+          .select("id")
+          .eq("profile_id", profile.id)
+          .maybeSingle();
+        if (dosenError) throw dosenError;
+        if (!dosenRow) throw new Error("Data dosen untuk akun ini tidak ditemukan.");
+
+        const resolvedDosenId = dosenRow.id as string;
+
+        const { data: kelasRows, error: kelasError } = await supabase
+          .from("kelas")
+          .select("id, nama_kelas, semester, tahun_ajaran, mata_kuliah ( nama_mk )")
+          .eq("dosen_id", resolvedDosenId)
+          .order("created_at", { ascending: false });
+        if (kelasError) throw kelasError;
+
+        const rows = (kelasRows ?? []) as unknown as KelasRow[];
+        if (isMounted) {
+          setDosenId(resolvedDosenId);
+          if (rows.length === 0) {
+            setOptionsError("Anda belum memiliki kelas yang terdaftar. Hubungi admin untuk menambahkan kelas.");
+          } else {
+            setKelasOptions(
+              rows.map((k) => ({
+                value: k.id,
+                label: `${k.nama_kelas ?? "-"} — ${k.mata_kuliah?.nama_mk ?? "-"} — ${k.semester ?? "-"} ${k.tahun_ajaran ?? ""}`.trim(),
+              }))
+            );
+            setSelectedKelasId(rows[0].id);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to load kelas for project form (cek RLS SELECT pada tabel kelas):", error);
+        if (isMounted) setOptionsError("Gagal memuat daftar kelas. Silakan muat ulang halaman.");
+      } finally {
+        if (isMounted) setIsLoadingOptions(false);
+      }
+    }
+
+    loadKelasOptions();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadUmkmOptions() {
+      if (selectedKelasId === "") {
+        setUmkmOptions([]);
+        setSelectedUmkmId("");
+        return;
+      }
+
+      try {
+        const { data: kelasUmkmRows, error: kelasUmkmError } = await supabase
+          .from("kelas_umkm")
+          .select("umkm_id, umkm ( nama_usaha )")
+          .eq("kelas_id", selectedKelasId);
+        if (kelasUmkmError) throw kelasUmkmError;
+
+        const rows = (kelasUmkmRows ?? []) as unknown as {
+          umkm_id: string;
+          umkm: { nama_usaha: string | null } | null;
+        }[];
+
+        if (isMounted) {
+          const options = rows.map((r) => ({ value: r.umkm_id, label: r.umkm?.nama_usaha ?? "(Tanpa nama)" }));
+          setUmkmOptions(options);
+          setSelectedUmkmId(options.length === 1 ? options[0].value : "");
+        }
+      } catch (error) {
+        console.error("Failed to load umkm mitra for selected kelas (cek RLS SELECT pada tabel kelas_umkm):", error);
+        if (isMounted) {
+          setUmkmOptions([]);
+          setSelectedUmkmId("");
+        }
+      }
+    }
+
+    loadUmkmOptions();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedKelasId]);
+
   const errors = {
+    kelas: selectedKelasId === "" ? "Kelas wajib dipilih." : null,
+    umkm: selectedUmkmId === "" ? "UMKM mitra wajib dipilih." : null,
     title: title.trim() === "" ? "Judul project wajib diisi." : null,
     description:
       description.trim() === ""
@@ -105,36 +185,18 @@ export default function TambahProjectPage() {
     e.preventDefault();
     setTouched(true);
     setSubmitError(null);
-    if (!isValid) return;
+    if (!isValid || !dosenId) return;
     if (isSubmitting) return;
 
     setIsSubmitting(true);
     try {
-      const profile = await getCurrentProfile();
-
-      const { data: dosenRow, error: dosenError } = await supabase
-        .from("dosen")
-        .select("id")
-        .eq("profile_id", profile.id)
-        .maybeSingle();
-      if (dosenError) throw dosenError;
-      if (!dosenRow) throw new Error("Data dosen untuk akun ini tidak ditemukan.");
-
-      const dosenId = dosenRow.id as string;
-      const resolved = await resolveKelasAndUmkm(dosenId);
-      if (!resolved.ok) {
-        setSubmitError(resolved.message);
-        setIsSubmitting(false);
-        return;
-      }
-
       const insertPayload = {
         judul_project: title.trim(),
         deskripsi: description.trim(),
         deadline,
         status: "draft",
-        kelas_id: resolved.kelasId,
-        umkm_id: resolved.umkmId,
+        kelas_id: selectedKelasId,
+        umkm_id: selectedUmkmId,
         created_by: dosenId,
       };
 
@@ -180,6 +242,39 @@ export default function TambahProjectPage() {
       <form onSubmit={handleSubmit}>
         <Card className="rounded-2xl p-6">
           <div className="flex flex-col gap-5">
+            {optionsError && !isLoadingOptions && (
+              <p className="rounded-xl bg-red-50 px-3.5 py-2 text-sm font-medium text-red-600">{optionsError}</p>
+            )}
+
+            <div className="flex flex-col gap-1.5">
+              <Select
+                label="Pilih Kelas"
+                id="kelas"
+                options={[{ value: "", label: "Pilih kelas..." }, ...kelasOptions]}
+                value={selectedKelasId}
+                onChange={(e) => setSelectedKelasId(e.target.value)}
+                disabled={isLoadingOptions || kelasOptions.length === 0}
+                required
+              />
+              {touched && errors.kelas && <p className="text-xs text-pink">{errors.kelas}</p>}
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Select
+                label="UMKM Mitra"
+                id="umkm"
+                options={[{ value: "", label: "Pilih UMKM mitra..." }, ...umkmOptions]}
+                value={selectedUmkmId}
+                onChange={(e) => setSelectedUmkmId(e.target.value)}
+                disabled={selectedKelasId === "" || umkmOptions.length === 0}
+                required
+              />
+              {selectedKelasId !== "" && umkmOptions.length === 0 && (
+                <p className="text-xs text-muted">Kelas ini belum terhubung dengan UMKM mitra. Hubungi admin.</p>
+              )}
+              {touched && errors.umkm && <p className="text-xs text-pink">{errors.umkm}</p>}
+            </div>
+
             <div className="flex flex-col gap-1.5">
               <Input
                 label="Judul Project"

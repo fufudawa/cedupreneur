@@ -7,6 +7,7 @@ import { Card, CardHeader, CardTitle, Badge, Button, Timeline } from "@/componen
 import type { TimelineItem } from "@/components/ui";
 import { supabase } from "@/lib/supabaseClient";
 import { useMahasiswaKelompok } from "@/lib/useMahasiswaKelompok";
+import { useProjectTugas } from "@/lib/useProjectTugas";
 
 const REPORT_STATUS_LABEL: Record<string, string> = {
   draft: "Draft",
@@ -20,12 +21,6 @@ const REPORT_STATUS_BADGE_VARIANT: Record<string, "gray" | "orange" | "green"> =
   reviewed: "green",
 };
 
-const REPORT_STATUS_TIMELINE: Record<string, TimelineItem["status"]> = {
-  draft: "belum",
-  submitted: "proses",
-  reviewed: "selesai",
-};
-
 const PEMBERI_ROLE_LABEL: Record<string, string> = {
   dosen: "Dosen",
   umkm: "Mitra UMKM",
@@ -33,6 +28,7 @@ const PEMBERI_ROLE_LABEL: Record<string, string> = {
 
 interface LaporanRow {
   id: string;
+  tugas_id: string | null;
   judul_laporan: string | null;
   status: string | null;
   created_at: string | null;
@@ -59,12 +55,13 @@ function formatDateTime(iso: string | null) {
 
 export default function MyProjectPage() {
   const { activeGroup, isHydrated: groupHydrated } = useMahasiswaKelompok();
+  const { tugasList, isHydrated: tugasHydrated } = useProjectTugas(activeGroup?.projectId || null);
 
   const [laporanList, setLaporanList] = useState<LaporanRow[]>([]);
   const [feedbackFeed, setFeedbackFeed] = useState<FeedbackFeedItem[]>([]);
   const [dataHydrated, setDataHydrated] = useState(false);
   const [fileMateriSignedUrl, setFileMateriSignedUrl] = useState<string | null>(null);
-  const isHydrated = groupHydrated && dataHydrated;
+  const isHydrated = groupHydrated && tugasHydrated && dataHydrated;
 
   useEffect(() => {
     let isMounted = true;
@@ -110,7 +107,7 @@ export default function MyProjectPage() {
           .from("laporan_progress")
           .select(
             `
-              id, judul_laporan, status, created_at,
+              id, tugas_id, judul_laporan, status, created_at,
               feedback ( id, pemberi_role, isi_feedback, created_at )
             `
           )
@@ -138,7 +135,15 @@ export default function MyProjectPage() {
           .sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime());
 
         if (isMounted) {
-          setLaporanList(rows.map(({ id, judul_laporan, status, created_at }) => ({ id, judul_laporan, status, created_at })));
+          setLaporanList(
+            rows.map(({ id, tugas_id, judul_laporan, status, created_at }) => ({
+              id,
+              tugas_id,
+              judul_laporan,
+              status,
+              created_at,
+            }))
+          );
           setFeedbackFeed(feed);
         }
       } catch (error) {
@@ -172,12 +177,22 @@ export default function MyProjectPage() {
     );
   }
 
-  const trackOfProject: TimelineItem[] = laporanList.slice(0, 5).map((report) => ({
-    id: report.id,
-    title: report.judul_laporan ?? "Laporan Progress",
-    description: REPORT_STATUS_LABEL[report.status ?? "draft"],
-    status: REPORT_STATUS_TIMELINE[report.status ?? "draft"] ?? "belum",
-  }));
+  // Timeline mengikuti Daftar Tugas buatan Dosen — bukan lagi daftar laporan
+  // upload (laporanList tetap dipakai untuk History di bawah).
+  const trackOfProject: TimelineItem[] = tugasList.map((tugas) => {
+    const laporanForTugas = laporanList.filter((l) => l.tugas_id === tugas.id);
+    const status: TimelineItem["status"] = tugas.isSelesai
+      ? "selesai"
+      : laporanForTugas.length > 0
+        ? "proses"
+        : "belum";
+    const description = tugas.isSelesai
+      ? "Ditandai selesai oleh Dosen"
+      : laporanForTugas.length > 0
+        ? `${laporanForTugas.length} laporan terkirim · menunggu Dosen`
+        : "Belum ada laporan terkirim";
+    return { id: tugas.id, title: tugas.judulTugas, description, status };
+  });
 
   const recentHistory = laporanList.slice(0, 3);
 
@@ -217,7 +232,7 @@ export default function MyProjectPage() {
         <CardTitle className="text-lg">Track of project</CardTitle>
         <p className="mb-6 mt-1 text-sm text-muted">Timeline</p>
         {trackOfProject.length === 0 ? (
-          <p className="py-6 text-center text-sm text-muted">Belum ada laporan progress yang dapat dipantau.</p>
+          <p className="py-6 text-center text-sm text-muted">Dosen belum membuat tugas/milestone untuk project ini.</p>
         ) : (
           <Timeline items={trackOfProject} />
         )}
