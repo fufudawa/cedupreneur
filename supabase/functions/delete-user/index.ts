@@ -87,13 +87,33 @@ async function requireAdmin(
 // Each helper deletes the role-specific record linked to the profile.
 // They throw on error so the caller can surface a single failure response.
 
+/**
+ * `dosen` and `umkm` are protected by RESTRICT foreign keys (kelas.dosen_id /
+ * project.created_by for dosen; project.umkm_id for umkm) — deleting one
+ * while it still has kelas/project attached fails with a raw Postgres
+ * "violates foreign key constraint" message. This turns that specific error
+ * (code 23503) into guidance the admin can actually act on, instead of
+ * leaking the constraint name to the UI.
+ */
+function friendlyDeleteError(role: ValidatedInput["role"], error: { code?: string; message: string }): string {
+  if (error.code === "23503") {
+    if (role === "dosen") {
+      return "Dosen ini masih mengampu kelas dan/atau memiliki project aktif. Pindahkan kelasnya ke dosen lain atau hapus kelas/project tersebut dulu lewat Data Master, baru hapus akun ini.";
+    }
+    if (role === "umkm") {
+      return "UMKM ini masih terhubung ke project aktif. Hapus atau pindahkan project tersebut dulu sebelum menghapus akun ini.";
+    }
+  }
+  return error.message;
+}
+
 async function deleteRoleRecord(supabase: SupabaseClient, input: ValidatedInput): Promise<void> {
   switch (input.role) {
     case "admin":
       return;
     case "dosen": {
       const { error } = await supabase.from("dosen").delete().eq("profile_id", input.id);
-      if (error) throw new Error(error.message);
+      if (error) throw new Error(friendlyDeleteError(input.role, error));
       return;
     }
     case "mahasiswa": {
@@ -103,7 +123,7 @@ async function deleteRoleRecord(supabase: SupabaseClient, input: ValidatedInput)
     }
     case "umkm": {
       const { error } = await supabase.from("umkm").delete().eq("profile_id", input.id);
-      if (error) throw new Error(error.message);
+      if (error) throw new Error(friendlyDeleteError(input.role, error));
       return;
     }
   }
